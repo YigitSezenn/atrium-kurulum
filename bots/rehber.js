@@ -2,13 +2,13 @@ const { GatewayIntentBits } = require("discord.js");
 const { agentRehberToken } = require("../src/config");
 const { getGuild } = require("../src/store");
 const { connectBus, emit } = require("../src/agents/bus");
-const { IDLE_EVERY, answerMember, say, speakIfMine, joinLines, idleLines, channelIsQuiet } = require("../src/agents/chat");
+const { IDLE_EVERY, answerMember, botsMayTalk, say, speakIfMine, joinLines, idleLines, channelIsQuiet } = require("../src/agents/chat");
 const { postSoftwareBoards } = require("../src/stack");
 const { startBot } = require("./runtime");
-const { ticket } = require("./ticket");
+const { handleTicket, ticket } = require("./ticket");
 const { announceRelease } = require("../src/release");
 
-const BOARD_KEYS = ["yardim", "projeler", "kaynaklar", "github"];
+const BOARD_KEYS = ["yardim", "projeler"];
 
 async function postOwnBoards(client, guildId, keys) {
   const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId).catch(() => null);
@@ -28,8 +28,11 @@ startBot({
   ],
   commands: [ticket],
   onInteraction: async (interaction) => {
-    if (!interaction.isChatInputCommand() || interaction.commandName !== "ticket") return;
-    await ticket.execute(interaction, emit);
+    if (interaction.isChatInputCommand() && interaction.commandName === "ticket") {
+      await ticket.execute(interaction, emit);
+      return;
+    }
+    await handleTicket(interaction, emit);
   },
   onReady: async (client) => {
     connectBus("rehber", {
@@ -47,6 +50,7 @@ startBot({
           return;
         }
         if (message.event !== "member.joined") return;
+        if (!botsMayTalk(message.data.guildId)) return;
         const channelId = getGuild(message.data.guildId)?.channels?.yigin;
         if (!channelId) return;
         if (say(emit, channelId, joinLines(message.data.name))) return;
@@ -85,12 +89,13 @@ startBot({
 
     const talk = async () => {
       for (const guild of client.guilds.cache.values()) {
+        if (!botsMayTalk(guild.id)) continue;
         const channelId = getGuild(guild.id)?.channels?.genel;
         if (!channelId) continue;
         const channel = await client.channels.fetch(channelId).catch(() => null);
         if (!channel?.isTextBased()) continue;
         if (!await channelIsQuiet(channel)) continue;
-        say(emit, channelId, idleLines());
+        say(emit, channelId, await idleLines());
       }
     };
     setTimeout(() => talk().catch((error) => console.error("Sohbet açılmadı:", error.message)), IDLE_EVERY);

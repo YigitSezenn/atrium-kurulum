@@ -27,8 +27,11 @@ async function resolveTrack(query) {
     info = await runYtdlp(target);
   } catch (error) {
     if (error instanceof UserError) throw error;
-    console.error("Parça aranamadı:", error.message);
-    throw new UserError("Parça bulunamadı. Başka bir ad veya bağlantı dene.");
+    const missing = error?.code === "ENOENT" || /yt-dlp indirilemedi|ENOENT/.test(error.message || "");
+    console.error(missing ? "yt-dlp hazır değil:" : "Parça aranamadı:", error.message);
+    throw new UserError(missing
+      ? "Müzik aracı henüz hazır değil. Biraz sonra aynı komutu yeniden yaz."
+      : "Parça bulunamadı. Başka bir ad veya bağlantı dene.");
   }
 
   if (!info.title) throw new UserError("Parça bulunamadı.");

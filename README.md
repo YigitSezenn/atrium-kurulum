@@ -1,6 +1,6 @@
 # Atrium
 
-Yazılım topluluğu için dört Discord botu. Hepsi aynı makinede durur ve kendi aralarında konuşur. İndiren kişi kendi sunucusuna kurabilir.
+Yazılım topluluğu için Discord botları. Hepsi aynı makinede durur ve kendi aralarında konuşur. İndiren kişi kendi sunucusuna kurabilir.
 
 | Bot | Discord adı | Ne yapar |
 | --- | --- | --- |
@@ -8,6 +8,7 @@ Yazılım topluluğu için dört Discord botu. Hepsi aynı makinede durur ve ken
 | Arcade | Arcade | Dil ve alan rolleri |
 | Source | Source | `/github`, `/dokuman`, depo kartı |
 | directory | directory | `/ticket`, yardım başlığı, kısa muhabbet |
+| Ward | Ward | Atma ve yasak. Token boşsa bu komutlar Atrium'da kalır |
 
 ## Ne lazım
 
@@ -17,7 +18,7 @@ Yazılım topluluğu için dört Discord botu. Hepsi aynı makinede durur ve ken
 
 ## Discord uygulamaları
 
-1. [Discord Developer Portal](https://discord.com/developers/applications) üzerinden dört uygulama aç: Atrium, Arcade, Source, directory.
+1. [Discord Developer Portal](https://discord.com/developers/applications) üzerinden uygulama aç: Atrium, Arcade, Source, directory. Atma ve yasağı ayrı bot yapsın istersen bir tane de Ward.
 2. Her uygulamada **Bot** sayfasına gir. **Privileged Gateway Intents** altından **Server Members Intent** ve **Message Content Intent** açık olsun.
 3. Her botun tokenını kopyala. Tokenı sohbete, repoya veya ekran görüntüsüne koyma.
 4. Botu sunucuya davet et. Adresin sonuna kendi uygulama kimliğini yaz:
@@ -37,6 +38,7 @@ DISCORD_TOKEN=          Atrium
 AGENT_STACK_TOKEN=      Arcade
 AGENT_KAYNAK_TOKEN=     Source
 AGENT_REHBER_TOKEN=     directory
+AGENT_BAN_TOKEN=        Ward, boşsa atma ve yasak Atrium'da kalır
 GUILD_ID=               kendi sunucunun kimliği
 AGENT_BUS_PORT=47831
 ```
@@ -46,6 +48,7 @@ Boş bırakılabilenler:
 - `SPOTIFY_CLIENT_ID` ve `SPOTIFY_CLIENT_SECRET` — `/spotify` için. Spotify uygulamasında yönlendirme adresi `SPOTIFY_REDIRECT_URI` ile aynı olsun.
 - `HENRIK_API_KEY` — `/valorant` için. Anahtarı [henrikdev.xyz](https://henrikdev.xyz) üzerinden al.
 - `YTDLP_COOKIES` — yaş sınırı olan YouTube videoları için çerez dosyasının yolu.
+- `CHAT_API_KEY` — bot sohbeti ve etiket cevapları için. Boşsa hazır replikler kullanılır. Ücretsiz anahtar [console.groq.com](https://console.groq.com) üzerinden alınır. `CHAT_API_EXPIRES` anahtarın bittiği gündür. Süre dolunca veya API anahtarı reddedince bot hazır repliğe döner ve logda yeni anahtar istendiğini yazar. `CHAT_API_BASE` ve `CHAT_MODEL` OpenAI uyumlu başka bir adrese de çevrilebilir.
 
 `.env` repoya girmez.
 
@@ -85,8 +88,16 @@ npm run agents
 - `/muzik ekle`, `/muzik liste`, `/muzik liste-cal` — kalıcı şarkı listesi.
 - `/spotify login` — Spotify hesabını bağlar.
 - `/github` ve `/dokuman` — Source. Projeler, yığın, yardım ve komut kanallarında çalışır.
-- `/ticket` — directory yardım başlığı açar.
+- `/ticket` — directory yardım başlığı açar. Yardım kartındaki buton da aynı işi yapar. Başlıkta yetkili üstlenir, açan veya yetkili kapatır. Kapanınca döküm yetkili sohbete düşer.
 - `/kanal-ayarla` — Kurucu, botun baktığı kanalı değiştirir.
-- `/uyar`, `/sustur`, `/at`, `/yasakla`, `/temizle` — Atrium, yetkili kanalında.
+- `/sohbet kapat` ve `/sohbet ac` — Kurucu, botların kendi aralarındaki konuşmasını keser veya açar. Etiketleyince verilen cevap durmaz.
+- `/uyar`, `/sustur` — Atrium, yetkili kanalında.
+- `/temizle` — bulunduğun yazı kanalındaki son mesajları siler. Her kanalda yazılır.
+- `/at` — üyeyi sunucudan atar. Onay butonu sorar. Tekrar davetle girebilir.
+- `/yasakla`, `/gecici-yasak`, `/yumusak-yasak`, `/yasak-kaldir`, `/yasaklar` — yetkili kanalında. Süre `30d`, `12s` veya `2g` yazılır. `AGENT_BAN_TOKEN` doluysa bu komutlar Ward botundadır ve o botun rolü hedefin üstünde olmalıdır.
+- `/not kaydet`, `/not goster` — sık kullanılan cevabı saklar.
+- `/anket soru secenekler` — seçenekleri `|` ile ayır. Herkes bir oy verir.
+- `/paket` — Source, npm paketinin sürümünü ve son 7 gündeki indirilmesini yazar.
+- Yıldız panosu — Kurucu `/kanal-ayarla` ile `Yıldız panosu` kanalını bağlar. Bir mesaj 3 yıldız alınca oraya düşer.
 
 Bir bota adıyla veya etiketle seslenince kısa cevap verir. Genel kanal uzun süre sessizse kendi aralarında birkaç satır konuşurlar.

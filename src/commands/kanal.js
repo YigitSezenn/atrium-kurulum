@@ -25,6 +25,7 @@ const KEYS = [
   ["giris-log", "Giriş kaydı"],
   ["denetim-log", "Denetim kaydı"],
   ["yetkili-sohbet", "Yetkili sohbeti"],
+  ["yildiz", "Yıldız panosu"],
 ];
 
 module.exports = {

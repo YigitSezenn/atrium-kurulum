@@ -1,10 +1,12 @@
 const fs = require("fs");
 const path = require("path");
 const { ActivityType, Client, GatewayIntentBits, MessageFlags, Partials, REST, Routes } = require("discord.js");
-const { token } = require("./config");
+const { agentBanToken, token } = require("./config");
 const { getGuild } = require("./store");
 const { UserError } = require("./errors");
 const { handleAccept, postWelcomeCard, registerWelcome } = require("./events/welcome");
+const { registerStarboard } = require("./events/starboard");
+const { handlePoll } = require("./commands/anket");
 const { registerAudit } = require("./events/audit");
 const { watchVoice } = require("./music/player");
 const { registerLevels } = require("./events/levels");
@@ -18,6 +20,7 @@ const { agentsEnabled } = require("./agents/mode");
 const { connectBus, emit } = require("./agents/bus");
 const { answerMember, speakIfMine } = require("./agents/chat");
 const { announceRelease } = require("./release");
+const { commands: banCommands, handleBan, watchBans } = require("./ban/mod");
 
 if (!token) {
   console.error("DISCORD_TOKEN eksik.");
@@ -37,6 +40,12 @@ function loadCommands() {
       body.push(command.data.toJSON());
     }
   }
+  if (!agentBanToken) {
+    for (const command of banCommands) {
+      commands.set(command.data.name, command);
+      body.push(command.data.toJSON());
+    }
+  }
   return { commands, body };
 }
 
@@ -47,9 +56,10 @@ const client = new Client({
     GatewayIntentBits.GuildModeration,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.MessageContent,
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.GuildMember],
+  partials: [Partials.Message, Partials.Channel, Partials.GuildMember, Partials.Reaction],
 });
 
 const { commands, body } = loadCommands();
@@ -63,8 +73,9 @@ async function handoffSoftware(applicationId) {
   if (first) {
     commands.delete("github");
     commands.delete("dokuman");
+    commands.delete("paket");
   }
-  const nextBody = body.filter((command) => command.name !== "github" && command.name !== "dokuman");
+  const nextBody = body.filter((command) => !["github", "dokuman", "paket"].includes(command.name));
   for (const guild of client.guilds.cache.values()) {
     if (first) {
       await publishCommands(applicationId, guild, nextBody).catch((error) => {
@@ -79,6 +90,7 @@ async function handoffSoftware(applicationId) {
   if (first) console.log("Yazılım işi Arcade, Codex ve Portico botlarına bırakıldı.");
 }
 registerWelcome(client);
+registerStarboard(client);
 registerAudit(client);
 registerLevels(client);
 watchVoice(client);
@@ -140,6 +152,7 @@ client.once("clientReady", async () => {
   ensureYtdlp()
     .then(() => console.log("yt-dlp hazır."))
     .catch((error) => console.error("yt-dlp indirilemedi:", error.message));
+  if (!agentBanToken) watchBans(client);
   announceRelease(client, "atrium").catch((error) => console.error("Yama notu yazılamadı:", error.message));
 });
 
@@ -157,6 +170,14 @@ client.on("interactionCreate", async (interaction) => {
   try {
     if (interaction.isButton() && interaction.customId === "lua:accept_rules") {
       await handleAccept(interaction);
+      return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith("ban:")) {
+      await handleBan(interaction);
+      return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith("anket:")) {
+      await handlePoll(interaction);
       return;
     }
     if (interaction.isButton() && interaction.customId.startsWith("muzik:")) {
@@ -184,6 +205,10 @@ client.on("interactionCreate", async (interaction) => {
     if (!command) return;
     await command.execute(interaction);
   } catch (error) {
+    if (error?.code === 10062) {
+      console.error("Komut zaman aşımına düştü. Discord 3 saniye içinde cevap bekler; istek kapandı. Komutu yeniden yaz.");
+      return;
+    }
     const detail = String(error.message || "bilinmeyen hata").slice(0, 180);
     const content = error instanceof UserError ? error.message : `Komut çalışırken bir hata oluştu: ${detail}`;
     if (!(error instanceof UserError)) console.error(error);

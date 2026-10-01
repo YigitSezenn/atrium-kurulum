@@ -1,6 +1,7 @@
 const path = require("path");
 const { spawn } = require("child_process");
 const { startHub } = require("../src/agents/bus");
+const { agentBanToken } = require("../src/config");
 const { agentsEnabled } = require("../src/agents/mode");
 
 function launch(file) {
@@ -30,6 +31,7 @@ async function main() {
   } else {
     console.error("Ajan tokenları yok. Yalnız Atrium kalkıyor.");
   }
+  if (agentBanToken) files.push(path.join(__dirname, "ban.js"));
   for (const file of files) children.set(file, launch(file));
 
   const stop = () => {

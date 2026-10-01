@@ -158,6 +158,50 @@ const github = {
   },
 };
 
+const paket = {
+  data: new SlashCommandBuilder()
+    .setName("paket")
+    .setDescription("npm paketinin sürümünü ve son haftaki indirilmesini gösterir.")
+    .addStringOption((option) => option
+      .setName("ad")
+      .setDescription("Paket adı, örneğin discord.js")
+      .setRequired(true)
+      .setMaxLength(80)),
+
+  async execute(interaction) {
+    const name = interaction.options.getString("ad", true).trim().toLowerCase();
+    if (!/^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9][a-z0-9._-]*$/.test(name)) throw new UserError("Paket adını npm'deki gibi yaz.");
+    await interaction.deferReply();
+    const response = await fetch(`https://registry.npmjs.org/${name.replace("/", "%2F")}`);
+    if (response.status === 404) throw new UserError("Bu paket npm'de yok.");
+    if (!response.ok) throw new UserError("npm şu an yanıt vermedi. Biraz sonra tekrar dene.");
+    const json = await response.json();
+    const version = json["dist-tags"]?.latest || "yok";
+    const info = json.versions?.[version] || {};
+    let downloads = "bilinmiyor";
+    try {
+      const stats = await fetch(`https://api.npmjs.org/downloads/point/last-week/${name.replace("/", "%2F")}`);
+      if (stats.ok) {
+        const body = await stats.json();
+        if (Number.isFinite(body.downloads)) downloads = String(body.downloads);
+      }
+    } catch {
+      downloads = "bilinmiyor";
+    }
+    const embed = new EmbedBuilder()
+      .setColor(0xcb3837)
+      .setTitle(json.name || name)
+      .setURL(`https://www.npmjs.com/package/${encodeURIComponent(name)}`)
+      .setDescription(String(info.description || json.description || "Açıklama yok.").slice(0, 350))
+      .addFields(
+        { name: "Sürüm", value: String(version), inline: true },
+        { name: "Lisans", value: info.license || json.license || "Yok", inline: true },
+        { name: "Son 7 gün", value: downloads, inline: true },
+      );
+    await interaction.editReply({ embeds: [embed] });
+  },
+};
+
 const dokuman = {
   data: new SlashCommandBuilder()
     .setName("dokuman")
@@ -189,7 +233,7 @@ const dokuman = {
 };
 
 module.exports = {
-  commands: [github, dokuman],
+  commands: [github, dokuman, paket],
   parseRepo,
   docUrl,
   suggestDocs,

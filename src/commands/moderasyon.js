@@ -134,59 +134,14 @@ const commands = [
   },
   {
     data: new SlashCommandBuilder()
-      .setName("at")
-      .setDescription("Üyeyi sunucudan atar.")
-      .addUserOption((option) => option.setName("uye").setDescription("Üye").setRequired(true))
-      .addStringOption((option) => option.setName("sebep").setDescription("Sebep").setMaxLength(300)),
-    async execute(interaction) {
-      requireLevel(interaction, 4);
-      const member = interaction.options.getMember("uye");
-      assertTarget(interaction.member, member);
-      const reason = interaction.options.getString("sebep") || "Sebep belirtilmedi";
-      await tell(member.user, `${interaction.guild.name} sunucusundan atıldın: ${reason}`);
-      await member.kick(reason);
-      await interaction.reply({ content: `${member.user.tag} atıldı.`, flags: MessageFlags.Ephemeral });
-    },
-  },
-  {
-    data: new SlashCommandBuilder()
-      .setName("yasakla")
-      .setDescription("Üyeyi yasaklar.")
-      .addUserOption((option) => option.setName("uye").setDescription("Üye").setRequired(true))
-      .addStringOption((option) => option.setName("sebep").setDescription("Sebep").setMaxLength(300))
-      .addIntegerOption((option) => option.setName("mesaj-sil").setDescription("Kaç günlük mesaj silinsin").setMinValue(0).setMaxValue(7)),
-    async execute(interaction) {
-      requireLevel(interaction, 5);
-      const member = interaction.options.getMember("uye");
-      assertTarget(interaction.member, member);
-      const reason = interaction.options.getString("sebep") || "Sebep belirtilmedi";
-      const days = interaction.options.getInteger("mesaj-sil") ?? 0;
-      await tell(member.user, `${interaction.guild.name} sunucusundan yasaklandın: ${reason}`);
-      await member.ban({ deleteMessageSeconds: days * 24 * 60 * 60, reason });
-      await interaction.reply({ content: `${member.user.tag} yasaklandı.`, flags: MessageFlags.Ephemeral });
-    },
-  },
-  {
-    data: new SlashCommandBuilder()
-      .setName("yasak-kaldir")
-      .setDescription("Kullanıcı kimliğiyle yasağı kaldırır.")
-      .addStringOption((option) => option.setName("kullanici-id").setDescription("Kullanıcı kimliği").setRequired(true))
-      .addStringOption((option) => option.setName("sebep").setDescription("Sebep").setMaxLength(300)),
-    async execute(interaction) {
-      requireLevel(interaction, 5);
-      const id = interaction.options.getString("kullanici-id").trim();
-      if (!/^\d{17,20}$/.test(id)) throw new UserError("Kimlik 17-20 haneli bir sayı olmalı.");
-      await interaction.guild.members.unban(id, interaction.options.getString("sebep") || "Yasak kaldırıldı");
-      await interaction.reply({ content: "Yasak kaldırıldı.", flags: MessageFlags.Ephemeral });
-    },
-  },
-  {
-    data: new SlashCommandBuilder()
       .setName("temizle")
       .setDescription("Bulunduğun kanaldaki son mesajları siler.")
       .addIntegerOption((option) => option.setName("adet").setDescription("1-100").setRequired(true).setMinValue(1).setMaxValue(100)),
     async execute(interaction) {
-      requireLevel(interaction, 3);
+      if (levelOf(interaction.member) < 3) throw new UserError("Bu işlem için yetkin yok.");
+      if (typeof interaction.channel?.bulkDelete !== "function") {
+        throw new UserError("Bu kanalda mesaj silinemiyor.");
+      }
       const amount = interaction.options.getInteger("adet");
       const deleted = await interaction.channel.bulkDelete(amount, true);
       await sendLog(

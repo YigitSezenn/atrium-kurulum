@@ -3,31 +3,22 @@ const path = require("path");
 const { EmbedBuilder } = require("discord.js");
 const { getGuild } = require("./store");
 
-const VERSION = "1.4.0";
+const VERSION = "1.8.0";
 
 const NOTES = {
   atrium: [
-    "Müzik komutları artık her yazı kanalında çalışır.",
-    "`/muzik cal` ve `/muzik liste-cal` içinde ses kanalı seçebilirsin. Boş bırakırsan bulunduğun kanala girerim.",
-    "Adımı yazınca veya etiketleyince cevap veririm.",
+    "Müzik aracı konteynerde hazır gelir. Şarkı araması, araç inmeden başlamaz.",
+    "`/muzik cal` Discord'a hemen cevap verir. Komut üç saniyelik süre aşımına düşmez.",
+    "Şarkı geçilince veya durunca kalan ffmpeg boru uyarısı loga yazılmaz.",
   ],
-  stack: [
-    "Adımı yazınca veya etiketleyince cevap veririm.",
-    "Yardım başlığında üstündeki dil rollerini söylerim.",
-  ],
-  kaynak: [
-    "`/github` ve `/dokuman` silinmiş kanala takılmaz.",
-    "Projeler, yığın, yardım ve komut kanallarında, yardım başlığında da çalışır.",
-    "Adımı yazınca cevap veririm.",
-  ],
-  rehber: [
-    "Yardım için `/ticket` yaz. Konu ve açıklama yeter, başlığı ben açarım.",
-    "Genel kanal 10 dakikadır sessizse kısa bir muhabbet başlatırım.",
-  ],
+  ban: [],
+  stack: [],
+  kaynak: [],
+  rehber: [],
 };
 
-const WAIT = { atrium: 2000, stack: 4000, kaynak: 6000, rehber: 8000 };
-const COLOR = { atrium: 0xf1c40f, stack: 0x3498db, kaynak: 0x24292f, rehber: 0x9b59b6 };
+const WAIT = { atrium: 2000, stack: 4000, kaynak: 6000, rehber: 8000, ban: 10000 };
+const COLOR = { atrium: 0xf1c40f, stack: 0x3498db, kaynak: 0x24292f, rehber: 0x9b59b6, ban: 0xe74c3c };
 
 function alreadyPosted(bot) {
   try {

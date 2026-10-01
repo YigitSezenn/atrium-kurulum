@@ -10,7 +10,7 @@ const {
   joinVoiceChannel,
 } = require("@discordjs/voice");
 const ffmpegPath = require("ffmpeg-static");
-const { killTree, spawnAudio } = require("./ytdlp");
+const { ensureYtdlp, killTree, spawnAudio } = require("./ytdlp");
 
 const queues = new Map();
 const boundConnections = new WeakSet();
@@ -31,6 +31,7 @@ class GuildPlayer {
     this.process = null;
     this.downloader = null;
     this.leaving = false;
+    this.manual = false;
     this.generation = 0;
     this.emptyTimer = null;
     this.idleTimer = null;
@@ -41,6 +42,9 @@ class GuildPlayer {
       this.onIdle().catch((error) => console.error("Sıra ilerletilemedi:", error));
     });
     this.player.on("error", (error) => {
+      const live = this.player.state.status === AudioPlayerStatus.Idle ? null : this.player.state.resource;
+      const stale = Boolean(live && error.resource && error.resource !== live);
+      if (this.manual || this.leaving || stale) return;
       console.error("Oynatıcı hatası:", error.message);
       this.killProcess();
       if (this.player.state.status !== AudioPlayerStatus.Idle) this.player.stop(true);
@@ -93,12 +97,13 @@ class GuildPlayer {
   }
 
   async startIfIdle() {
-    if (this.current || this.player.state.status === AudioPlayerStatus.Playing) return;
+    const blocked = Boolean(this.current) || this.player.state.status === AudioPlayerStatus.Playing;
+    if (blocked) return;
     await this.playNext();
   }
 
   async onIdle() {
-    if (this.leaving || this.advancing) return;
+    if (this.leaving || this.advancing || this.manual) return;
     this.advancing = true;
     try {
       this.killProcess();
@@ -109,6 +114,7 @@ class GuildPlayer {
   }
 
   async playNext() {
+    await ensureYtdlp();
     this.clearTimer("idleTimer");
     const generation = ++this.generation;
     const track = this.queue.shift();
@@ -149,6 +155,7 @@ class GuildPlayer {
     this.process = child;
     downloader.stdout.pipe(child.stdin);
     child.stdin.on("error", () => {});
+    child.stdout.on("error", () => {});
 
     const fail = (label, detail) => {
       if (retired || this.generation !== generation || this.leaving) return;
@@ -166,7 +173,8 @@ class GuildPlayer {
     });
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString().trim();
-      if (text) console.error("ffmpeg:", text.slice(0, 300));
+      if (!text || /connection reset by peer|broken pipe|error muxing a packet|error writing trailer|error closing file|error submitting a packet|task finished with error code: -104/i.test(text)) return;
+      console.error("ffmpeg:", text.slice(0, 300));
     });
     child.on("error", (error) => fail("ffmpeg açılmadı:", error.message));
     child.on("close", (code) => {
@@ -186,10 +194,12 @@ class GuildPlayer {
   }
 
   skip() {
-    this.killProcess();
-    if (this.player.state.status !== AudioPlayerStatus.Idle) {
-      this.player.stop(true);
-      return;
+    this.manual = true;
+    try {
+      this.killProcess();
+      if (this.player.state.status !== AudioPlayerStatus.Idle) this.player.stop(true);
+    } finally {
+      this.manual = false;
     }
     this.playNext().catch((error) => console.error("Sıra ilerletilemedi:", error));
   }

@@ -199,9 +199,9 @@ const muzik = {
     if (sub === "liste-cal") {
       const list = savedList(getGuild(interaction.guildId));
       if (!list.length) throw new UserError("Liste boş. Önce `/muzik ekle` ile şarkı yaz.");
+      await interaction.deferReply();
       const voice = chosenVoice(interaction);
       await guard(player, async () => {
-        await interaction.deferReply();
         await interaction.editReply("Liste hazırlanıyor. Bitene kadar yeni çalma komutu alınmaz.");
         if (player.channelId && player.channelId !== voice.id && !canDj(interaction.member) && !soleHuman(interaction.member)) {
           throw new UserError("Bot başka bir ses kanalında. Onu taşımak için DJ olmalısın.");
@@ -226,9 +226,9 @@ const muzik = {
     }
 
     if (sub === "cal") {
+      await interaction.deferReply();
       const voice = chosenVoice(interaction);
       await guard(player, async () => {
-        await interaction.deferReply();
         await interaction.editReply("İstek alındı. Arama bitene kadar yeni çalma komutu alınmaz.");
         const queries = await collectQueries(interaction.options.getString("sorgu"));
         if (player.channelId && player.channelId !== voice.id && !canDj(interaction.member) && !soleHuman(interaction.member)) {

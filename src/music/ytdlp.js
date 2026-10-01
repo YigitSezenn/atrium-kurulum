@@ -8,14 +8,27 @@ const downloadName = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp_linux
 const binary = path.join(__dirname, "..", "..", "bin", binaryName);
 const downloadUrl = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${downloadName}`;
 
-async function ensureYtdlp() {
-  if (fs.existsSync(binary)) return binary;
+let pending = null;
+
+function ensureYtdlp() {
+  if (fs.existsSync(binary)) return Promise.resolve(binary);
+  if (!pending) {
+    pending = downloadYtdlp().finally(() => {
+      pending = null;
+    });
+  }
+  return pending;
+}
+
+async function downloadYtdlp() {
   fs.mkdirSync(path.dirname(binary), { recursive: true });
   const response = await fetch(downloadUrl, { redirect: "follow" });
   if (!response.ok) throw new Error(`yt-dlp indirilemedi (${response.status})`);
   const bytes = Buffer.from(await response.arrayBuffer());
-  fs.writeFileSync(binary, bytes);
-  if (process.platform !== "win32") fs.chmodSync(binary, 0o755);
+  const part = `${binary}.part`;
+  await fs.promises.writeFile(part, bytes);
+  if (process.platform !== "win32") await fs.promises.chmod(part, 0o755);
+  await fs.promises.rename(part, binary);
   return binary;
 }
 
@@ -59,7 +72,8 @@ function parseProbe(text) {
   };
 }
 
-function runYtdlp(target) {
+async function runYtdlp(target) {
+  await ensureYtdlp();
   const args = withCookies([
     "--no-warnings",
     "--no-playlist",

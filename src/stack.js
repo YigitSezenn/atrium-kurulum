@@ -1,4 +1,4 @@
-const { ActionRowBuilder, EmbedBuilder, MessageFlags, StringSelectMenuBuilder } = require("discord.js");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, StringSelectMenuBuilder } = require("discord.js");
 const { getGuild, updateGuild } = require("./store");
 const { emit } = require("./agents/bus");
 const { liveId } = require("./liveChannel");
@@ -30,7 +30,7 @@ const BOARDS = [
       title: "Yardım",
       color: 0x3498db,
       description: [
-        "Sorunu `/ticket` ile aç.",
+        "Sorunu alttaki butonla veya `/ticket` ile aç.",
         "Konu kısa olsun. Açıklamada ne yaptığını, ne beklediğini ve tam hata metnini yaz.",
         "Kodu üç tırnak içine koy.",
         "Başlık açılınca Arcade rollerini, Source doküman bağlantısını yazar.",
@@ -111,7 +111,7 @@ function stackPanel(guild) {
 
 function boardPayload(guild, board) {
   if (board.panel) return stackPanel(guild);
-  return {
+  const payload = {
     embeds: [
       new EmbedBuilder()
         .setColor(board.embed.color)
@@ -119,6 +119,12 @@ function boardPayload(guild, board) {
         .setDescription(board.embed.description),
     ],
   };
+  if (board.channel === "yardim") {
+    payload.components = [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("ticket:panel").setLabel("Başlık aç").setStyle(ButtonStyle.Primary),
+    )];
+  }
+  return payload;
 }
 
 async function ensureStackRoles(guild) {

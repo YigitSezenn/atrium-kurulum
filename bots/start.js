@@ -1,6 +1,7 @@
 const path = require("path");
 const { spawn } = require("child_process");
 const {
+  agentBanToken,
   agentKaynakToken,
   agentRehberToken,
   agentStackToken,
@@ -22,7 +23,9 @@ if (missing.length) {
 
 async function main() {
   await startHub();
-  const children = ["stack.js", "kaynak.js", "rehber.js"].map((file) => spawn(
+  const files = ["stack.js", "kaynak.js", "rehber.js"];
+  if (agentBanToken) files.push("ban.js");
+  const children = files.map((file) => spawn(
     process.execPath,
     [path.join(__dirname, file)],
     { stdio: "inherit", env: process.env },
