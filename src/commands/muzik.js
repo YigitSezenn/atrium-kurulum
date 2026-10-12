@@ -83,6 +83,9 @@ async function handleMusicButton(interaction) {
   const player = getPlayer(interaction.guildId);
   if (interaction.customId === "muzik:stop") {
     if (!player.current && !player.queue.length) throw new UserError("Çalan bir parça yok.");
+    if (!sameVoice(interaction.member, player.channelId)) {
+      throw new UserError("Botun olduğu ses kanalında olmalısın.");
+    }
     if (!canDj(interaction.member) && !soleHuman(interaction.member)) {
       throw new UserError("Sırayı yalnız DJ, yetkili veya kanalda tek başına olan kişi kapatabilir.");
     }
@@ -136,6 +139,8 @@ const muzik = {
     .addSubcommand((sub) => sub.setName("durdur").setDescription("Sırayı temizler ve ses kanalından ayrılır."))
     .addSubcommand((sub) => sub.setName("duraklat").setDescription("Çalmayı duraklatır."))
     .addSubcommand((sub) => sub.setName("devam").setDescription("Duraklatılmış şarkıyı sürdürür."))
+    .addSubcommand((sub) => sub.setName("dongu").setDescription("Çalan şarkıyı bitince başa sarar. Tekrar yazınca kapanır."))
+    .addSubcommand((sub) => sub.setName("basa").setDescription("Çalan şarkıyı hemen başa sarar."))
     .addSubcommand((sub) => sub.setName("kuyruk").setDescription("Şu anki sırayı gösterir."))
     .addSubcommand((sub) => sub
       .setName("ses")
@@ -203,7 +208,7 @@ const muzik = {
       const voice = chosenVoice(interaction);
       await guard(player, async () => {
         await interaction.editReply("Liste hazırlanıyor. Bitene kadar yeni çalma komutu alınmaz.");
-        if (player.channelId && player.channelId !== voice.id && !canDj(interaction.member) && !soleHuman(interaction.member)) {
+        if (player.channelId && player.channelId !== voice.id && !canDj(interaction.member)) {
           throw new UserError("Bot başka bir ses kanalında. Onu taşımak için DJ olmalısın.");
         }
         await player.connect(voice);
@@ -216,7 +221,7 @@ const muzik = {
 
     if (sub === "kuyruk") {
       const lines = [
-        player.current ? `Çalıyor: **${player.current.title}**` : "Çalan parça yok.",
+        player.current ? `Çalıyor: **${player.current.title}**${player.repeat ? " (döngü)" : ""}` : "Çalan parça yok.",
         ...player.queue.slice(0, 10).map((track, index) => `${index + 1}. ${track.title}`),
       ];
       if (player.queue.length > 10) lines.push(`+${player.queue.length - 10} parça daha`);
@@ -231,7 +236,7 @@ const muzik = {
       await guard(player, async () => {
         await interaction.editReply("İstek alındı. Arama bitene kadar yeni çalma komutu alınmaz.");
         const queries = await collectQueries(interaction.options.getString("sorgu"));
-        if (player.channelId && player.channelId !== voice.id && !canDj(interaction.member) && !soleHuman(interaction.member)) {
+        if (player.channelId && player.channelId !== voice.id && !canDj(interaction.member)) {
           throw new UserError("Bot başka bir ses kanalında. Onu taşımak için DJ olmalısın.");
         }
         await player.connect(voice);
@@ -249,20 +254,28 @@ const muzik = {
       return;
     }
     if (sub === "duraklat") {
-      player.pause();
-      await interaction.reply("Duraklatıldı.");
+      await interaction.reply(player.pause() ? "Duraklatıldı." : "Duraklatılamadı.");
       return;
     }
     if (sub === "devam") {
-      player.resume();
-      await interaction.reply("Devam ediyor.");
+      await interaction.reply(player.resume() ? "Devam ediyor." : "Duraklatılmış değil.");
+      return;
+    }
+    if (sub === "dongu") {
+      const on = player.toggleRepeat();
+      await interaction.reply(on ? "Döngü açık. Bu parça bitince başa sarar." : "Döngü kapalı.");
+      return;
+    }
+    if (sub === "basa") {
+      player.restart();
+      await interaction.reply("Başa sarıldı.");
       return;
     }
     if (sub === "ses") {
       if (!canDj(interaction.member)) throw new UserError("Sesi DJ veya yetkili ayarlar.");
-      const level = interaction.options.getInteger("seviye") / 100;
-      player.setVolume(level);
-      await interaction.reply(`Ses %${interaction.options.getInteger("seviye")} oldu.`);
+      const percent = interaction.options.getInteger("seviye");
+      player.setVolume(percent / 100);
+      await interaction.reply(`Ses %${percent} oldu.`);
       return;
     }
     if (sub === "durdur") {

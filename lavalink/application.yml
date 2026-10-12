@@ -1,0 +1,45 @@
+server:
+  port: 2333
+  address: 0.0.0.0
+lavalink:
+  plugins:
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
+      snapshot: false
+  server:
+    password: "atrium-ses"
+    timeouts:
+      connectTimeoutMs: 8000
+      connectionRequestTimeoutMs: 8000
+      socketTimeoutMs: 8000
+    sources:
+      youtube: false
+      bandcamp: false
+      soundcloud: true
+      twitch: false
+      vimeo: false
+      nico: false
+      http: false
+      local: false
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: false
+    clients:
+      - MWEB
+      - WEB
+      - ANDROID_VR
+      - WEBEMBEDDED
+    clientOptions:
+      MWEB:
+        searching: false
+      WEBEMBEDDED:
+        searching: false
+    remoteCipher:
+      url: "http://yt-cipher:8001"
+      userAgent: "Atrium"
+logging:
+  level:
+    root: INFO
+    lavalink: INFO

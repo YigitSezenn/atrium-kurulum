@@ -1,6 +1,5 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { UserError } = require("../errors");
-const { MAX_QUEUE } = require("./player");
 const { resolveTrack, formatDuration } = require("./resolve");
 
 const BUSY = "Bir liste sıraya giriyor. Bitene kadar /muzik cal ve /spotify cal çalışmaz.";
@@ -35,20 +34,19 @@ async function guard(player, work) {
 
 async function topUp(player) {
   if (player.loading || player.topping || player.leaving) return;
-  if (!player.backlog?.length || player.queue.length >= MAX_QUEUE) return;
+  if (!player.backlog?.length || player.queue.length >= 1) return;
   player.topping = true;
   const token = player.loadGeneration;
   try {
-    while (
-      player.backlog.length
-      && player.queue.length < MAX_QUEUE
-      && player.loadGeneration === token
-      && !player.leaving
-    ) {
+    while (player.backlog.length && player.queue.length < 1 && !player.loading && !player.leaving) {
       const next = player.backlog.shift();
+      if (!next) return;
       try {
         const found = await resolveTrack(next.query);
-        if (player.loadGeneration !== token || player.leaving) return;
+        if (player.loadGeneration !== token || player.leaving) {
+          player.backlog.unshift(next);
+          return;
+        }
         if (!player.enqueue({ ...found, requesterId: next.requesterId })) {
           player.backlog.unshift(next);
           return;
@@ -67,19 +65,17 @@ async function fillQueries(player, interaction, queries, requesterId) {
   const token = player.loadGeneration;
   const wasPlaying = Boolean(player.current);
   const many = queries.length > 1;
-  const firstBatch = Math.min(MAX_QUEUE, queries.length);
   if (many) {
-    await interaction.editReply(`Liste ${queries.length} parça. İlk ${firstBatch} aranıyor. Bitene kadar yeni çalma komutu alınmaz.`);
+    await interaction.editReply(`Liste ${queries.length} parça. İlki aranıyor. Kalanlar çaldıkça eklenecek.`);
   } else {
     await interaction.editReply("Şarkı aranıyor. Bitene kadar yeni çalma komutu alınmaz.");
   }
 
   const added = [];
   let skipped = 0;
-  let announced = false;
   let index = 0;
 
-  while (index < queries.length && player.queue.length < MAX_QUEUE) {
+  while (index < queries.length && !added.length) {
     if (player.loadGeneration !== token) return { added, skipped, waiting: player.backlog.length, cancelled: true };
     const query = queries[index];
     index += 1;
@@ -92,24 +88,7 @@ async function fillQueries(player, interaction, queries, requesterId) {
         break;
       }
       added.push(track);
-      if (!announced) {
-        announced = true;
-        await player.startIfIdle();
-      }
-      if (many) {
-        const head = added[0]
-          ? `Başlıyor: **${added[0].title}**. Aranan ${index}/${queries.length}, sırada ${added.length}.`
-          : `Aranan ${index}/${queries.length}.`;
-        await interaction.editReply({
-          content: `${head} Bitene kadar yeni çalma komutu alınmaz.`,
-          components: [controlRow()],
-        }).catch(() => {});
-      } else {
-        const line = wasPlaying
-          ? `Sıraya eklendi: **${track.title}** (${formatDuration(track.duration)})`
-          : `Başlıyor: **${track.title}** (${formatDuration(track.duration)})`;
-        await interaction.editReply({ content: line, components: [controlRow()] }).catch(() => {});
-      }
+      await player.startIfIdle();
     } catch (error) {
       if (queries.length === 1) throw error;
       skipped += 1;
@@ -122,12 +101,14 @@ async function fillQueries(player, interaction, queries, requesterId) {
   }
 
   if (!added.length && !player.backlog.length) throw new UserError("Parça bulunamadı. Başka bir ad veya bağlantı dene.");
-  if (many && player.loadGeneration === token) {
-    const notes = [];
-    if (skipped) notes.push(`${skipped} parça bulunamadı.`);
-    if (player.backlog.length) notes.push(`Kalan ${player.backlog.length} parça çaldıkça eklenecek.`);
-    const tail = notes.length ? ` ${notes.join(" ")}` : "";
-    await interaction.followUp({ content: `Sırada ${added.length} parça.${tail}` }).catch(() => {});
+  if (player.loadGeneration === token && added.length) {
+    const track = added[0];
+    const line = wasPlaying
+      ? `Sıraya eklendi: **${track.title}** (${formatDuration(track.duration)})`
+      : `Başlıyor: **${track.title}** (${formatDuration(track.duration)})`;
+    const rest = player.backlog.length ? ` Kalan ${player.backlog.length} parça çaldıkça eklenecek.` : "";
+    const missed = skipped ? ` ${skipped} parça bulunamadı.` : "";
+    await interaction.editReply({ content: `${line}${rest}${missed}`, components: [controlRow()] }).catch(() => {});
   }
   return { added, skipped, waiting: player.backlog.length, cancelled: player.loadGeneration !== token };
 }

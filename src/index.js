@@ -11,7 +11,7 @@ const { registerAudit } = require("./events/audit");
 const { watchVoice } = require("./music/player");
 const { registerLevels } = require("./events/levels");
 const { resumeRgb } = require("./rgb");
-const { ensureYtdlp } = require("./music/ytdlp");
+const { bindLavalink } = require("./music/lavalink");
 const { handleSpotifyComponent } = require("./commands/spotify");
 const { handleMusicButton } = require("./commands/muzik");
 const { handleValorantButton, handleValorantModal, postValorantPanel } = require("./commands/valorant");
@@ -61,6 +61,8 @@ const client = new Client({
   ],
   partials: [Partials.Message, Partials.Channel, Partials.GuildMember, Partials.Reaction],
 });
+
+bindLavalink(client);
 
 const { commands, body } = loadCommands();
 client.commands = commands;
@@ -149,9 +151,6 @@ client.once("clientReady", async () => {
     bootGuild(guild);
   }
   resumeRgb(client);
-  ensureYtdlp()
-    .then(() => console.log("yt-dlp hazır."))
-    .catch((error) => console.error("yt-dlp indirilemedi:", error.message));
   if (!agentBanToken) watchBans(client);
   announceRelease(client, "atrium").catch((error) => console.error("Yama notu yazılamadı:", error.message));
 });

@@ -28,8 +28,7 @@ function voiceOrThrow(interaction) {
 async function queueQueries(interaction, queries) {
   const voice = voiceOrThrow(interaction);
   const player = getPlayer(interaction.guildId);
-  const alone = voice.members.filter((entry) => !entry.user.bot).size === 1;
-  if (player.channelId && player.channelId !== voice.id && levelOf(interaction.member) < 2 && !alone) {
+  if (player.channelId && player.channelId !== voice.id && levelOf(interaction.member) < 2) {
     throw new UserError("Bot başka bir ses kanalında. Onu taşımak için DJ olmalısın.");
   }
   await player.connect(voice);
