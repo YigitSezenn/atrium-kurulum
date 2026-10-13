@@ -61,11 +61,10 @@ startBot({
         }
         if (message.event !== "help.opened") return;
         const result = await rolesOf(client, message.data.guildId, message.data.userId);
-        const channel = await client.channels.fetch(message.data.threadId);
-        const line = result.roles.length
-          ? `${result.roles.join(", ")}. Bunlar onda var.`
-          : "Üstünde dil rolü yok. Menüden seçsin.";
-        await channel.send(line);
+        if (!result.roles.length) return;
+        const channel = await client.channels.fetch(message.data.threadId).catch(() => null);
+        if (!channel?.isTextBased()) return;
+        await channel.send(`Dil rolleri: ${result.roles.join(", ")}.`).catch(() => {});
       },
     });
     client.on("messageCreate", (message) => {

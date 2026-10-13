@@ -21,16 +21,15 @@ const {
 
 function voiceOrThrow(interaction) {
   const channel = interaction.member?.voice?.channel;
-  if (!channel) throw new UserError("Önce bir ses kanalına gir.");
+  if (!channel) throw new UserError("Önce bir ses kanalına gir. İstersen komutta kanal da seçebilirsin.");
   return channel;
 }
 
 async function queueQueries(interaction, queries) {
   const voice = voiceOrThrow(interaction);
   const player = getPlayer(interaction.guildId);
-  const alone = voice.members.filter((entry) => !entry.user.bot).size === 1;
-  if (player.channelId && player.channelId !== voice.id && levelOf(interaction.member) < 2 && !alone) {
-    throw new UserError("Bot başka bir ses kanalında. Onu taşımak için DJ olmalısın.");
+  if (player.channelId && player.channelId !== voice.id && levelOf(interaction.member) < 2) {
+    throw new UserError("Bot şu an başka bir ses kanalında. Taşımak için DJ olman gerekir.");
   }
   await player.connect(voice);
   player.textChannel = interaction.channel;
@@ -45,8 +44,8 @@ const spotify = {
     .addSubcommand((sub) => sub.setName("cikis").setDescription("Spotify bağlantısını kaldırır."))
     .addSubcommand((sub) => sub
       .setName("ara")
-      .setDescription("Arama sonucunu sıraya koyup sırayla çalar.")
-      .addStringOption((option) => option.setName("sorgu").setDescription("Şarkı veya sanatçı").setRequired(true).setMaxLength(100)))
+      .setDescription("Şarkı adıyla Spotify'da arar ve çalar.")
+      .addStringOption((option) => option.setName("sarki").setDescription("örnek: Dreams Joakim Karud").setRequired(true).setMaxLength(100)))
     .addSubcommand((sub) => sub.setName("liste").setDescription("Bir çalma listesini sırayla çalar.")),
 
   async execute(interaction) {
@@ -92,7 +91,7 @@ const spotify = {
     await guard(player, async () => {
       await interaction.deferReply();
       await interaction.editReply("Aranıyor. Bitene kadar yeni çalma komutu alınmaz.");
-      const tracks = await searchTracks(interaction.user.id, interaction.options.getString("sorgu"));
+      const tracks = await searchTracks(interaction.user.id, interaction.options.getString("sarki"));
       if (!tracks.length) throw new UserError("Spotify'da bu aramaya parça çıkmadı.");
       await queueQueries(interaction, tracks.map((track) => track.query));
     });

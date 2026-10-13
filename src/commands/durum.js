@@ -1,5 +1,5 @@
 const { EmbedBuilder, MessageFlags, SlashCommandBuilder } = require("discord.js");
-const ffmpegPath = require("ffmpeg-static");
+const { connected } = require("../music/node");
 const { getGuild } = require("../store");
 const { levelOf } = require("../staff");
 const { UserError } = require("../errors");
@@ -27,7 +27,7 @@ module.exports = {
       .setTitle(`${interaction.guild.name} durum`)
       .addFields(
         { name: "Kurulum", value: config?.setupAt || "yok", inline: true },
-        { name: "ffmpeg", value: ffmpegPath ? "hazır" : "yok", inline: true },
+        { name: "Müzik", value: connected() ? "hazır" : "kapalı", inline: true },
         { name: "Uyarı kaydı", value: String(Object.keys(config?.warns || {}).length), inline: true },
         { name: "Roller", value: roles.slice(0, 1000) },
       );

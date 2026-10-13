@@ -1,7 +1,28 @@
 services:
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:4-alpine
+    container_name: lavalink
+    restart: unless-stopped
+    environment:
+      - _JAVA_OPTIONS=-Xmx384M
+    volumes:
+      - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
+    ports:
+      - "127.0.0.1:2333:2333"
+
   atrium:
     build: .
+    container_name: atrium
     restart: unless-stopped
+    init: true
     env_file: .env
+    environment:
+      LAVALINK_URL: http://lavalink:2333
+      LAVALINK_PASSWORD: atrium-ses
+      YT_BRIDGE_URL: http://atrium:4100
+    depends_on:
+      - lavalink
     volumes:
       - ./data:/app/data
+      - ./src:/app/src
+      - ./bots:/app/bots

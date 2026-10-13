@@ -1,0 +1,25 @@
+server:
+  port: 2333
+  address: 0.0.0.0
+lavalink:
+  server:
+    password: "atrium-ses"
+    timeouts:
+      connectTimeoutMs: 20000
+      connectionRequestTimeoutMs: 20000
+      socketTimeoutMs: 20000
+    sources:
+      youtube: false
+      bandcamp: false
+      soundcloud: true
+      twitch: false
+      vimeo: false
+      nico: false
+      http: true
+      local: false
+    soundcloudSearchEnabled: true
+    soundcloudFilterOutPreviewTracks: true
+logging:
+  level:
+    root: INFO
+    lavalink: INFO

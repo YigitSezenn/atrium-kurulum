@@ -1,13 +1,13 @@
 const crypto = require("crypto");
-const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const { MessageFlags } = require("discord.js");
 const { LIST_CAP } = require("./player");
 const { spotifyClientId, spotifyClientSecret, spotifyRedirectUri } = require("../config");
 const { UserError } = require("../errors");
+const { jsonFile } = require("../jsonFile");
 
-const file = path.join(__dirname, "..", "..", "data", "spotify.json");
+const db = jsonFile(path.join(__dirname, "..", "..", "data", "spotify.json"), () => ({ users: {} }));
 const pending = new Map();
 let server = null;
 
@@ -20,33 +20,20 @@ function base64url(buffer) {
   return buffer.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function read() {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return { users: {} };
-  }
-}
-
-function write(data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-}
-
 function saveUser(userId, entry) {
-  const data = read();
+  const data = structuredClone(db.read());
   data.users[userId] = entry;
-  write(data);
+  db.write(data);
 }
 
 function dropUser(userId) {
-  const data = read();
+  const data = structuredClone(db.read());
   delete data.users[userId];
-  write(data);
+  db.write(data);
 }
 
 function session(userId) {
-  return read().users[userId] || null;
+  return db.read().users[userId] || null;
 }
 
 function requireApp() {

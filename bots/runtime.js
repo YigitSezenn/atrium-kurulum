@@ -1,5 +1,11 @@
-const { Client, MessageFlags, REST, Routes } = require("discord.js");
+const { Client, MessageFlags, Options, REST, Routes } = require("discord.js");
 const { UserError } = require("../src/errors");
+const { guardProcess } = require("../src/lifecycle");
+
+const SWEEPERS = {
+  ...Options.DefaultSweeperSettings,
+  messages: { interval: 15 * 60, lifetime: 30 * 60 },
+};
 
 function inviteFor(applicationId) {
   return `https://discord.com/api/oauth2/authorize?client_id=${applicationId}&permissions=8&scope=bot%20applications.commands`;
@@ -29,7 +35,8 @@ function startBot({ token, name, intents, commands = [], onInteraction, onReady,
     console.error(`${name} için token yok.`);
     process.exit(1);
   }
-  const client = new Client({ intents });
+  const client = new Client({ intents, sweepers: SWEEPERS });
+  guardProcess(client);
   client.on("interactionCreate", async (interaction) => {
     try {
       await onInteraction(interaction, client);

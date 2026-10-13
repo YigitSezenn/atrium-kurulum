@@ -1,36 +1,26 @@
 const fs = require("fs");
 const path = require("path");
+const { jsonFile } = require("./jsonFile");
 
-const file = path.join(__dirname, "..", "..", "data", "levels.json");
-let chain = Promise.resolve();
-
-function read() {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return { guilds: {} };
-  }
-}
-
-function write(data) {
+const file = path.join(__dirname, "..", "data", "levels.json");
+const legacy = path.join(__dirname, "..", "..", "data", "levels.json");
+if (!fs.existsSync(file) && fs.existsSync(legacy)) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  fs.copyFileSync(legacy, file);
 }
+
+const db = jsonFile(file, () => ({ guilds: {} }));
 
 function update(guildId, mutator) {
-  const run = chain.then(() => {
-    const data = read();
+  return db.update((data) => {
     data.guilds[guildId] ??= { users: {}, rewards: {} };
     const result = mutator(data.guilds[guildId]);
-    write(data);
     return result === undefined ? data.guilds[guildId] : result;
   });
-  chain = run.then(() => undefined, () => undefined);
-  return run;
 }
 
 function getGuild(guildId) {
-  return read().guilds[guildId] || { users: {}, rewards: {} };
+  return db.read().guilds[guildId] || { users: {}, rewards: {} };
 }
 
 function xpToNext(level) {

@@ -2,7 +2,44 @@ const { getGuild, updateGuild } = require("./store");
 const { ROLE_DEFS } = require("./constants");
 
 const timers = new Map();
+const generations = new Map();
+const inflight = new Map();
+const budgets = new Map();
+const tracked = new WeakSet();
 const STAFF = ["Kurucu", "Yönetici"];
+const STEP = 30;
+const MIN_GAP = 15_000;
+const RESERVE = 150;
+const ROLE_ROUTE = "/guilds/:id/roles/:id";
+
+function trackBudget(client) {
+  if (tracked.has(client)) return;
+  tracked.add(client);
+  client.rest.on("response", (request, response) => {
+    if (request.method !== "PATCH" || request.route !== ROLE_ROUTE) return;
+    const guildId = request.path.split("/")[2];
+    const remaining = Number(response.headers.get("x-ratelimit-remaining"));
+    const limit = Number(response.headers.get("x-ratelimit-limit"));
+    const resetAfter = Number(response.headers.get("x-ratelimit-reset-after"));
+    if (!guildId || ![remaining, limit, resetAfter].every(Number.isFinite)) return;
+    const used = limit - remaining;
+    const refill = used > 0 ? (resetAfter * 1000) / used : budgets.get(guildId)?.refill || 86_400;
+    budgets.set(guildId, { remaining, limit, refill, at: Date.now() });
+  });
+}
+
+function tokens(guildId) {
+  const budget = budgets.get(guildId);
+  if (!budget) return Infinity;
+  const gained = Math.floor((Date.now() - budget.at) / budget.refill);
+  return Math.min(budget.limit, budget.remaining + gained);
+}
+
+function nextDelay(guildId) {
+  const missing = RESERVE + STAFF.length - tokens(guildId);
+  if (missing <= 0) return MIN_GAP;
+  return Math.max(MIN_GAP, Math.ceil(missing * budgets.get(guildId).refill) + 1000);
+}
 
 function hsl(hue) {
   const h = ((hue % 360) + 360) % 360;
@@ -23,8 +60,9 @@ function baseColor(key) {
 
 function stopRgb(guildId) {
   const timer = timers.get(guildId);
-  if (timer) clearInterval(timer);
+  if (timer) clearTimeout(timer);
   timers.delete(guildId);
+  generations.set(guildId, (generations.get(guildId) || 0) + 1);
 }
 
 async function staffRoles(guild) {
@@ -42,7 +80,11 @@ async function staffRoles(guild) {
 async function paint(guild, hue) {
   const roles = await staffRoles(guild);
   await Promise.all(roles.map(({ role }, index) => role.edit({
-    colors: { primaryColor: hsl(hue + index * 48) },
+    colors: {
+      primaryColor: hsl(hue + index * 48),
+      secondaryColor: null,
+      tertiaryColor: null,
+    },
     reason: "RGB renk",
   }).catch((error) => {
     console.error("RGB rengi değişmedi:", error.message);
@@ -52,24 +94,71 @@ async function paint(guild, hue) {
 async function restore(guild) {
   const roles = await staffRoles(guild);
   await Promise.all(roles.map(({ key, role }) => role.edit({
-    colors: { primaryColor: baseColor(key) },
+    colors: {
+      primaryColor: baseColor(key),
+      secondaryColor: null,
+      tertiaryColor: null,
+    },
     reason: "RGB kapandı",
-  }).catch(() => {})));
+  }).catch((error) => {
+    console.error("RGB rengi dönmedi:", error.message);
+  })));
 }
 
-async function tick(guild) {
+function currentGeneration(guildId) {
+  return generations.get(guildId) || 0;
+}
+
+async function tick(guild, generation) {
   const state = getGuild(guild.id)?.rgb;
-  if (!state?.enabled) {
-    stopRgb(guild.id);
-    return;
-  }
-  const hue = ((state.hue || 0) + 12) % 360;
+  if (!state?.enabled || generation !== currentGeneration(guild.id)) return;
+  if (tokens(guild.id) - RESERVE < STAFF.length) return;
+  const hue = ((state.hue || 0) + STEP) % 360;
   await paint(guild, hue);
+  if (generation !== currentGeneration(guild.id)) return;
+  let stopped = false;
   await updateGuild(guild.id, (entry) => {
-    entry.rgb ??= {};
-    entry.rgb.enabled = true;
+    if (!entry.rgb?.enabled || generation !== currentGeneration(guild.id)) {
+      stopped = true;
+      return;
+    }
     entry.rgb.hue = hue;
   });
+  if (!stopped || generation !== currentGeneration(guild.id)) return;
+  stopRgb(guild.id);
+  await restore(guild);
+}
+
+function enqueueTick(guild) {
+  const generation = currentGeneration(guild.id);
+  const prev = inflight.get(guild.id) || Promise.resolve();
+  const job = prev.catch(() => {}).then(() => tick(guild, generation));
+  inflight.set(guild.id, job);
+  job.catch((error) => console.error("RGB karesi olmadı:", error.message));
+  job.finally(() => {
+    if (inflight.get(guild.id) === job) inflight.delete(guild.id);
+  });
+  return job;
+}
+
+function loop(guild, generation, delay) {
+  const timer = setTimeout(async () => {
+    if (generation !== currentGeneration(guild.id)) return;
+    await enqueueTick(guild).catch(() => {});
+    if (generation !== currentGeneration(guild.id)) return;
+    loop(guild, generation, nextDelay(guild.id));
+  }, delay);
+  timers.set(guild.id, timer);
+}
+
+async function closeRgb(guild) {
+  stopRgb(guild.id);
+  const pending = inflight.get(guild.id);
+  if (pending) await pending.catch(() => {});
+  await updateGuild(guild.id, (entry) => {
+    if (entry.rgb) entry.rgb.enabled = false;
+  });
+  await restore(guild);
 }
 
 async function liftStaff(guild) {
@@ -91,12 +180,9 @@ async function liftStaff(guild) {
 
 function startRgb(guild) {
   stopRgb(guild.id);
+  trackBudget(guild.client);
   liftStaff(guild).catch((error) => console.error(error.message));
-  const timer = setInterval(() => {
-    tick(guild).catch((error) => console.error(error.message));
-  }, 5_000);
-  timers.set(guild.id, timer);
-  tick(guild).catch((error) => console.error(error.message));
+  loop(guild, currentGeneration(guild.id), 0);
 }
 
 async function clearLegacyRole(guild) {
@@ -130,4 +216,4 @@ function hasStaffColor(member) {
   return STAFF.some((key) => saved[key] && member.roles.cache.has(saved[key]));
 }
 
-module.exports = { startRgb, stopRgb, resumeRgb, restore, clearLegacyRole, hasStaffColor };
+module.exports = { startRgb, stopRgb, closeRgb, resumeRgb, restore, clearLegacyRole, hasStaffColor };

@@ -61,9 +61,8 @@ async function grant(member, amount, extra = {}) {
 
 async function syncGuild(guild) {
   const users = getGuild(guild.id).users || {};
-  await guild.members.fetch().catch(() => {});
   for (const [id, user] of Object.entries(users)) {
-    const member = guild.members.cache.get(id);
+    const member = guild.members.cache.get(id) || await guild.members.fetch(id).catch(() => null);
     if (!member || member.user.bot) continue;
     await syncLevelRole(member, progress(user.xp || 0).level).catch((error) => {
       console.error("Seviye rolü güncellenemedi:", error.message);
