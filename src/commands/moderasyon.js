@@ -4,7 +4,8 @@ const { levelOf } = require("../staff");
 const { UserError } = require("../errors");
 const { sendLog, baseEmbed } = require("../log");
 const { postWelcomeCard } = require("../events/welcome");
-const { postValorantPanel } = require("./valorant");
+const { postValorantPanel } = require("../valorant");
+const { agentValorantToken } = require("../config");
 const { postSoftwareBoards } = require("../stack");
 const { agentsEnabled } = require("../agents/mode");
 const { busReady, emit } = require("../agents/bus");
@@ -244,7 +245,7 @@ async function restorePanels(guild, keys) {
         });
       }
     }
-    if (keys.includes("komutlar")) await postValorantPanel(guild);
+    if (keys.includes("komutlar") && !agentValorantToken) await postValorantPanel(guild);
     if (agentsEnabled() && busReady()) emit("setup.done", { guildId: guild.id, keys });
     else await postSoftwareBoards(guild, keys);
     return true;
@@ -254,4 +255,4 @@ async function restorePanels(guild, keys) {
   }
 }
 
-module.exports = { commands };
+module.exports = { commands, restorePanels };

@@ -19,7 +19,14 @@ const { busReady, emit } = require("../agents/bus");
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const RETIRED_CHANNELS = ["medya", "oyun", "kod", "oyun-ses", "kod-ses", "kaynaklar", "github", "birlikte-ses"];
+const LOG_CHANNELS = ["giris-log", "denetim-log", "bot-log"];
+const SOFTWARE_CHANNELS = {
+  yigin: ["🧩・Yigin", "🧩・yigin"],
+  yardim: ["❓・Yardim", "❓・yardim"],
+  projeler: ["🚀・Projeler", "🚀・projeler"],
+  "kategori-yazilim": ["💻・Yazilim", "💻・yazilim"],
+};
+const RETIRED_CHANNELS = ["medya", "oyun", "kod", "oyun-ses", "kod-ses", "kaynaklar", "github", "birlikte-ses", ...LOG_CHANNELS];
 
 const CATEGORIES = [
   {
@@ -31,50 +38,6 @@ const CATEGORIES = [
       { key: "kurallar", name: "📜・Kurallar", previousNames: ["📜・kurallar"], topic: "Sunucu kuralları", readOnly: true },
       { key: "duyurular", name: "📣・Duyurular", previousNames: ["📣・duyurular"], topic: "Duyurular", readOnly: true },
       { key: "hos-geldin", name: "👋・Karsilama", previousNames: ["👋・karsilama"], topic: "Yeni gelenler", readOnly: true },
-    ],
-  },
-  {
-    key: "kategori-topluluk",
-    name: "💬・Topluluk",
-    previousNames: ["💬・topluluk"],
-    mode: "members",
-    channels: [
-      { key: "genel", name: "💬・Genel", previousNames: ["💬・genel"], topic: "Genel sohbet" },
-      { key: "seviye", name: "⭐・Seviye", previousNames: ["⭐・seviye"], topic: "Seviye atlamaları ve sıralama", readOnly: true },
-      { key: "komutlar", name: "🤖・Komutlar", previousNames: ["🤖・komutlar"], topic: "Bot komutları" },
-      { key: "ses", name: "🔊 Ses", voice: true },
-    ],
-  },
-  {
-    key: "kategori-yazilim",
-    name: "💻・Yazilim",
-    previousNames: ["💻・yazilim"],
-    mode: "members",
-    channels: [
-      { key: "yigin", name: "🧩・Yigin", previousNames: ["🧩・yigin"], topic: "Dil ve alan rolünü seç", readOnly: true },
-      { key: "yardim", name: "❓・Yardim", previousNames: ["❓・yardim"], topic: "Takıldığın yeri yeni bir başlık olarak aç" },
-      { key: "projeler", name: "🚀・Projeler", previousNames: ["🚀・projeler"], topic: "Proje, kaynak ve depo. /github burada da çalışır." },
-    ],
-  },
-  {
-    key: "kategori-muzik",
-    name: "🎵・Muzik",
-    previousNames: ["🎵・muzik"],
-    mode: "music",
-    channels: [
-      { key: "muzik", name: "🎵・Muzik", previousNames: ["🎵・muzik"], topic: "Müzik komutları ve sıra" },
-      { key: "muzik-ses", name: "🎵 Müzik", previousNames: ["🎵 Müzik"], voice: true },
-    ],
-  },
-  {
-    key: "kategori-denetim",
-    name: "🛡️・Denetim",
-    previousNames: ["🛡️・denetim"],
-    mode: "staff",
-    channels: [
-      { key: "giris-log", name: "🛡️・Giris-log", previousNames: ["🛡️・giris-log"], topic: "Giriş, çıkış ve kural onayı" },
-      { key: "denetim-log", name: "🛡️・Denetim-log", previousNames: ["🛡️・denetim-log"], topic: "Moderasyon ve denetim kaydı" },
-      { key: "yetkili-sohbet", name: "🛡️・Yetkili", previousNames: ["🛡️・yetkili-sohbet"], topic: "Yetkili sohbeti" },
     ],
   },
 ];
@@ -301,7 +264,14 @@ async function buildServer(guild, { resetRoles, resetChannels }) {
     await wait(250);
   }
   if (resetChannels) {
-    const keep = new Set([...Object.values(channels), ...Object.values(categories)]);
+    const bound = Object.entries(previous.channels || {})
+      .filter(([key]) => !RETIRED_CHANNELS.includes(key))
+      .map(([, id]) => id);
+    const keep = new Set([...Object.values(channels), ...Object.values(categories), ...bound]);
+    for (const id of bound) {
+      const parentId = guild.channels.cache.get(id)?.parentId;
+      if (parentId) keep.add(parentId);
+    }
     const victims = [...guild.channels.cache.values()].sort((a, b) => {
       if (a.type === ChannelType.GuildCategory) return 1;
       if (b.type === ChannelType.GuildCategory) return -1;
@@ -322,7 +292,7 @@ async function buildServer(guild, { resetRoles, resetChannels }) {
     verificationLevel: GuildVerificationLevel.Medium,
     explicitContentFilter: GuildExplicitContentFilter.AllMembers,
     defaultMessageNotifications: GuildDefaultMessageNotifications.OnlyMentions,
-    systemChannel: channels["giris-log"],
+    systemChannel: null,
     systemChannelFlags: GuildSystemChannelFlags.SuppressJoinNotifications,
     reason: "Atrium sunucu ayarları",
   }).catch((error) => {
@@ -332,7 +302,9 @@ async function buildServer(guild, { resetRoles, resetChannels }) {
   await updateGuild(guild.id, (entry) => {
     entry.roles = Object.fromEntries(Object.entries(created).map(([key, role]) => [key, role.id]));
     entry.stackRoles = Object.fromEntries(Object.entries(stackRoles).map(([key, role]) => [key, role.id]));
-    entry.channels = { ...categories, ...channels };
+    const manual = Object.fromEntries(Object.entries(previous.channels || {})
+      .filter(([key, id]) => id && !RETIRED_CHANNELS.includes(key) && guild.channels.cache.has(id)));
+    entry.channels = { ...manual, ...categories, ...channels };
     entry.rulesMessageId = rulesMessage.id;
     entry.setupAt = new Date().toISOString();
     entry.warns ??= {};
@@ -387,4 +359,36 @@ async function upsertRules(guild, channel, messageId) {
   return message;
 }
 
-module.exports = { buildServer, upsertRules };
+async function dropLogChannels(guild) {
+  const entry = getGuild(guild.id) || {};
+  const saved = entry.channels || {};
+  const ids = new Set(LOG_CHANNELS.map((key) => saved[key]).filter(Boolean));
+  const keys = [...LOG_CHANNELS];
+  if (!entry.softwareDropped) {
+    for (const [key, names] of Object.entries(SOFTWARE_CHANNELS)) {
+      const channel = saved[key] && guild.channels.cache.get(saved[key]);
+      if (channel && !names.some((name) => sameName(channel.name, name))) continue;
+      keys.push(key);
+      if (channel) ids.add(channel.id);
+    }
+  }
+  for (const channel of guild.channels.cache.values()) {
+    if (channel.isTextBased?.() && /(^|[^a-z])bot-log$/i.test(channel.name)) ids.add(channel.id);
+  }
+  if (!ids.size && entry.softwareDropped && !LOG_CHANNELS.some((key) => key in saved)) return;
+  const categories = [...ids].filter((id) => guild.channels.cache.get(id)?.type === ChannelType.GuildCategory);
+  for (const id of [...ids].filter((item) => !categories.includes(item)).concat(categories)) {
+    const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null);
+    if (!channel) continue;
+    await channel.delete("Log ve yazılım kanalları kaldırıldı").catch((error) => {
+      console.error(`Kanal silinemedi (${channel.name}):`, error.message);
+    });
+    await wait(250);
+  }
+  await updateGuild(guild.id, (entry) => {
+    for (const key of keys) delete entry.channels?.[key];
+    entry.softwareDropped = true;
+  });
+}
+
+module.exports = { buildServer, dropLogChannels, upsertRules };

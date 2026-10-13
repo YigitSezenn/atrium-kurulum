@@ -35,6 +35,15 @@ function namedQuery(track) {
   return `${artist} ${track.name}`.replace(/\s+/g, " ").trim();
 }
 
+function spotifyMeta(track, link = "") {
+  return {
+    title: track.name || "",
+    artist: (track.artists || []).map((item) => item.name).filter(Boolean).join(", "),
+    link: track.external_urls?.spotify || link,
+    image: track.album?.images?.[0]?.url || "",
+  };
+}
+
 async function queriesFromApi(parsed) {
   const token = await appAccess();
   if (!token) return null;
@@ -44,29 +53,31 @@ async function queriesFromApi(parsed) {
     if (!response.ok) return null;
     const track = await response.json().catch(() => ({}));
     if (!track.name) return null;
-    return { queries: [namedQuery(track)], total: 1 };
+    return { queries: [namedQuery(track)], total: 1, meta: [spotifyMeta(track)] };
   }
   const path = parsed.kind === "album"
     ? `/albums/${parsed.id}/tracks?market=TR&limit=50`
     : `/playlists/${parsed.id}/tracks?market=TR&limit=50`;
   const queries = [];
+  const meta = [];
   let url = `https://api.spotify.com/v1${path}`;
   let total = 0;
   while (url && queries.length < LIST_CAP) {
     const response = await fetch(url, { headers });
-    if (!response.ok) return queries.length ? { queries, total: total || queries.length } : null;
+    if (!response.ok) return queries.length ? { queries, meta, total: total || queries.length } : null;
     const body = await response.json().catch(() => ({}));
     total = body.total || total;
     for (const item of body.items || []) {
       const track = item.track || item;
       if (!track?.name || track.type === "episode") continue;
       queries.push(namedQuery(track));
+      meta.push(spotifyMeta(track));
       if (queries.length >= LIST_CAP) break;
     }
     url = queries.length >= LIST_CAP ? null : body.next;
   }
   if (!queries.length) return null;
-  return { queries, total: total || queries.length };
+  return { queries, meta, total: total || queries.length };
 }
 
 async function spotifyQueries(input) {
@@ -77,23 +88,25 @@ async function spotifyQueries(input) {
   const response = await fetch(`https://open.spotify.com/embed/${parsed.kind}/${parsed.id}`, {
     headers: { "User-Agent": "Mozilla/5.0" },
   });
-  if (!response.ok) throw new UserError("Spotify bağlantısı açılmadı.");
+  if (!response.ok) throw new UserError("Spotify linkini açamadım. Linki kontrol edip tekrar dene.");
   const html = await response.text();
   const marker = '<script id="__NEXT_DATA__" type="application/json">';
   const start = html.indexOf(marker);
-  if (start < 0) throw new UserError("Spotify listesinden parça adları okunamadı.");
+  if (start < 0) throw new UserError("Bu Spotify listesindeki şarkı adlarını okuyamadım. Tek bir şarkı linki dene.");
   const jsonText = html.slice(start + marker.length, html.indexOf("</script>", start));
   let data;
   try {
     data = JSON.parse(jsonText);
   } catch {
-    throw new UserError("Spotify listesinden parça adları okunamadı.");
+    throw new UserError("Bu Spotify listesindeki şarkı adlarını okuyamadım. Tek bir şarkı linki dene.");
   }
   const entity = data?.props?.pageProps?.state?.data?.entity;
   const rows = rowsFromEntity(entity);
-  if (!rows.length) throw new UserError("Bu Spotify bağlantısında çalınacak parça yok.");
+  if (!rows.length) throw new UserError("Bu Spotify linkinde çalacak şarkı yok.");
   const queries = rows.slice(0, LIST_CAP).map((row) => `${row.artist} ${row.title}`.replace(/\s+/g, " ").trim());
-  return { queries, total: rows.length };
+  const link = parsed.kind === "track" ? `https://open.spotify.com/track/${parsed.id}` : "";
+  const meta = rows.slice(0, LIST_CAP).map((row) => ({ title: row.title, artist: row.artist, link, image: "" }));
+  return { queries, meta, total: rows.length };
 }
 
 module.exports = { spotifyQueries, parseSpotify };

@@ -2,7 +2,7 @@ const { ChannelType, MessageFlags, SlashCommandBuilder } = require("discord.js")
 const { UserError } = require("../errors");
 const { levelOf } = require("../staff");
 const { getGuild, updateGuild } = require("../store");
-const { clearLegacyRole, hasStaffColor, restore, startRgb, stopRgb } = require("../rgb");
+const { clearLegacyRole, closeRgb, hasStaffColor, startRgb } = require("../rgb");
 const { closeDisco, openDisco } = require("../disco");
 
 function requireAdmin(interaction) {
@@ -28,12 +28,9 @@ const rgb = {
     requireAdmin(interaction);
     const sub = interaction.options.getSubcommand();
     if (sub === "kapat") {
-      stopRgb(interaction.guildId);
-      await updateGuild(interaction.guildId, (entry) => {
-        if (entry.rgb) entry.rgb.enabled = false;
-      });
-      await restore(interaction.guild);
-      await interaction.reply({ content: "RGB durdu. Kurucu ve Yönetici eski renklerine döndü.", flags: MessageFlags.Ephemeral });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await closeRgb(interaction.guild);
+      await interaction.editReply("RGB durdu. Kurucu ve Yönetici eski renklerine döndü.");
       return;
     }
 
@@ -51,7 +48,7 @@ const rgb = {
       entry.rgb = { enabled: true, hue: entry.rgb?.hue || 0 };
     });
     startRgb(interaction.guild);
-    await interaction.reply({ content: "Kurucu ve Yönetici renkleri yaklaşık 5 saniyede bir değişir.", flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: "Kurucu ve Yönetici renkleri dönmeye başladı. İlk saatlerde 15 saniyede bir değişir. Discord günde yaklaşık 1000 rol düzenlemesine izin verdiği için sonra 3 dakikada bire yavaşlar.", flags: MessageFlags.Ephemeral });
   },
 };
 

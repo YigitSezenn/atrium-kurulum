@@ -1,25 +1,33 @@
 const fs = require("fs");
 const path = require("path");
-const { ActivityType, Client, GatewayIntentBits, MessageFlags, Partials, REST, Routes } = require("discord.js");
-const { agentBanToken, token } = require("./config");
+const { ActivityType, Client, GatewayIntentBits, MessageFlags, Options, Partials, REST, Routes } = require("discord.js");
+const { agentBanToken, agentValorantToken, token } = require("./config");
 const { getGuild } = require("./store");
 const { UserError } = require("./errors");
 const { handleAccept, postWelcomeCard, registerWelcome } = require("./events/welcome");
 const { registerStarboard } = require("./events/starboard");
 const { handlePoll } = require("./commands/anket");
-const { registerAudit } = require("./events/audit");
-const { watchVoice } = require("./music/player");
+const { dropLogChannels } = require("./setup/structure");
+const { stopAll, watchVoice } = require("./music/player");
+const { guardProcess, onShutdown } = require("./lifecycle");
 const { registerLevels } = require("./events/levels");
 const { resumeRgb } = require("./rgb");
-const { bindLavalink } = require("./music/lavalink");
+const { bindLavalink } = require("./music/node");
 const { handleSpotifyComponent } = require("./commands/spotify");
 const { handleMusicButton } = require("./commands/muzik");
-const { handleValorantButton, handleValorantModal, postValorantPanel } = require("./commands/valorant");
+const valorant = require("./valorant");
 const { handleStackPick, postSoftwareBoards, releaseSoftwareBoards } = require("./stack");
 const { agentsEnabled } = require("./agents/mode");
 const { connectBus, emit } = require("./agents/bus");
 const { answerMember, speakIfMine } = require("./agents/chat");
 const { announceRelease } = require("./release");
+const { registerAutomod } = require("./events/automod");
+const { startBackups } = require("./backup");
+const { startGithubFeed } = require("./githubFeed");
+const { handleRunModal } = require("./commands/yazilim");
+
+const SOFTWARE_COMMANDS = ["github", "dokuman", "paket", "calistir", "github-takip"];
+
 const { commands: banCommands, handleBan, watchBans } = require("./ban/mod");
 
 if (!token) {
@@ -40,11 +48,13 @@ function loadCommands() {
       body.push(command.data.toJSON());
     }
   }
-  if (!agentBanToken) {
-    for (const command of banCommands) {
-      commands.set(command.data.name, command);
-      body.push(command.data.toJSON());
-    }
+  const owned = [
+    ...(agentBanToken ? [] : banCommands),
+    ...(agentValorantToken ? [] : valorant.commands),
+  ];
+  for (const command of owned) {
+    commands.set(command.data.name, command);
+    body.push(command.data.toJSON());
   }
   return { commands, body };
 }
@@ -60,8 +70,14 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
   ],
   partials: [Partials.Message, Partials.Channel, Partials.GuildMember, Partials.Reaction],
+  sweepers: {
+    ...Options.DefaultSweeperSettings,
+    messages: { interval: 30 * 60, lifetime: 6 * 60 * 60 },
+  },
 });
 
+guardProcess(client);
+onShutdown(stopAll);
 bindLavalink(client);
 
 const { commands, body } = loadCommands();
@@ -73,11 +89,9 @@ async function handoffSoftware(applicationId) {
   const first = !handedOff;
   handedOff = true;
   if (first) {
-    commands.delete("github");
-    commands.delete("dokuman");
-    commands.delete("paket");
+    for (const name of SOFTWARE_COMMANDS) commands.delete(name);
   }
-  const nextBody = body.filter((command) => !["github", "dokuman", "paket"].includes(command.name));
+  const nextBody = body.filter((command) => !SOFTWARE_COMMANDS.includes(command.name));
   for (const guild of client.guilds.cache.values()) {
     if (first) {
       await publishCommands(applicationId, guild, nextBody).catch((error) => {
@@ -93,9 +107,10 @@ async function handoffSoftware(applicationId) {
 }
 registerWelcome(client);
 registerStarboard(client);
-registerAudit(client);
 registerLevels(client);
+registerAutomod(client);
 watchVoice(client);
+startBackups();
 
 const inviteFor = (applicationId) => (
   `https://discord.com/api/oauth2/authorize?client_id=${applicationId}&permissions=8&scope=bot%20applications.commands`
@@ -108,12 +123,10 @@ async function publishCommands(applicationId, guild, commandBody = body) {
 }
 
 function bootGuild(guild) {
+  dropLogChannels(guild).catch((error) => console.error("Log kanalları kaldırılamadı:", error.message));
   const saved = getGuild(guild.id);
   if (saved?.channels?.["hos-geldin"]) {
     postWelcomeCard(guild).catch((error) => console.error("Karşılama kartı yazılamadı:", error.message));
-  }
-  if (saved?.channels?.komutlar) {
-    postValorantPanel(guild).catch((error) => console.error("Valorant paneli yazılamadı:", error.message));
   }
   if (!handedOff && saved?.channels?.yigin) {
     postSoftwareBoards(guild).catch((error) => console.error("Yazılım kartları yazılamadı:", error.message));
@@ -152,6 +165,8 @@ client.once("clientReady", async () => {
   }
   resumeRgb(client);
   if (!agentBanToken) watchBans(client);
+  if (!agentsEnabled()) startGithubFeed(client);
+  if (!agentValorantToken) valorant.startValorant(client);
   announceRelease(client, "atrium").catch((error) => console.error("Yama notu yazılamadı:", error.message));
 });
 
@@ -183,14 +198,8 @@ client.on("interactionCreate", async (interaction) => {
       await handleMusicButton(interaction);
       return;
     }
-    if (interaction.isButton() && interaction.customId === "valorant:link") {
-      await handleValorantButton(interaction);
-      return;
-    }
-    if (interaction.isModalSubmit() && interaction.customId === "valorant:modal") {
-      await handleValorantModal(interaction);
-      return;
-    }
+    if (!agentValorantToken && await valorant.handleValorantInteraction(interaction)) return;
+    if (await handleRunModal(interaction)) return;
     if (interaction.isStringSelectMenu() && interaction.customId === "yigin:roller") {
       await handleStackPick(interaction);
       return;
@@ -215,7 +224,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.replied) {
       await interaction.followUp(payload).catch(() => {});
     } else if (interaction.deferred) {
-      await interaction.editReply({ content }).catch(() => interaction.followUp(payload));
+      await interaction.editReply({ content, embeds: [], components: [] }).catch(() => interaction.followUp(payload));
     } else {
       await interaction.reply(payload).catch(() => {});
     }

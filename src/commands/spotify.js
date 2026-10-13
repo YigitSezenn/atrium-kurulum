@@ -21,7 +21,7 @@ const {
 
 function voiceOrThrow(interaction) {
   const channel = interaction.member?.voice?.channel;
-  if (!channel) throw new UserError("Önce bir ses kanalına gir.");
+  if (!channel) throw new UserError("Önce bir ses kanalına gir. İstersen komutta kanal da seçebilirsin.");
   return channel;
 }
 
@@ -29,7 +29,7 @@ async function queueQueries(interaction, queries) {
   const voice = voiceOrThrow(interaction);
   const player = getPlayer(interaction.guildId);
   if (player.channelId && player.channelId !== voice.id && levelOf(interaction.member) < 2) {
-    throw new UserError("Bot başka bir ses kanalında. Onu taşımak için DJ olmalısın.");
+    throw new UserError("Bot şu an başka bir ses kanalında. Taşımak için DJ olman gerekir.");
   }
   await player.connect(voice);
   player.textChannel = interaction.channel;

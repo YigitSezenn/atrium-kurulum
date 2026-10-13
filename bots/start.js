@@ -5,6 +5,7 @@ const {
   agentKaynakToken,
   agentRehberToken,
   agentStackToken,
+  agentValorantToken,
 } = require("../src/config");
 const { startHub } = require("../src/agents/bus");
 
@@ -25,9 +26,10 @@ async function main() {
   await startHub();
   const files = ["stack.js", "kaynak.js", "rehber.js"];
   if (agentBanToken) files.push("ban.js");
+  if (agentValorantToken) files.push("radiant.js");
   const children = files.map((file) => spawn(
     process.execPath,
-    [path.join(__dirname, file)],
+    ["--max-old-space-size=192", "--max-semi-space-size=2", path.join(__dirname, file)],
     { stdio: "inherit", env: process.env },
   ));
   const stop = () => {

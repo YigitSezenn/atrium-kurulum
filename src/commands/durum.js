@@ -1,5 +1,5 @@
 const { EmbedBuilder, MessageFlags, SlashCommandBuilder } = require("discord.js");
-const { connected } = require("../music/lavalink");
+const { connected } = require("../music/node");
 const { getGuild } = require("../store");
 const { levelOf } = require("../staff");
 const { UserError } = require("../errors");

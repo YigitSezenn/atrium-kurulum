@@ -33,7 +33,7 @@ const BOARDS = [
         "Sorunu alttaki butonla veya `/ticket` ile aç.",
         "Konu kısa olsun. Açıklamada ne yaptığını, ne beklediğini ve tam hata metnini yaz.",
         "Kodu üç tırnak içine koy.",
-        "Başlık açılınca Arcade rollerini, Source doküman bağlantısını yazar.",
+        "Açılınca Directory yetkililere haber verir. Biri üstlenene kadar Source ilgili dokümanı yazabilir.",
       ].join("\n"),
     },
   },
@@ -86,17 +86,18 @@ function stackPanel(guild) {
       description: stack.about.slice(0, 100),
       value: stack.key.slice(0, 100),
     }));
-  const help = channelMention(guild, "yardim", "yardım kanalı");
-  const projects = channelMention(guild, "projeler", "projeler kanalı");
+  const help = channelMention(guild, "yardim", null);
+  const projects = channelMention(guild, "projeler", null);
   const embed = new EmbedBuilder()
     .setColor(0x3498db)
     .setTitle("Dil ve alan")
     .setDescription([
       "Çalıştığın dili ve alanı seç. Birden fazla rol alabilirsin.",
       "Hepsini bırakmak için menüyü boşaltıp gönder.",
-      `Soru sormak için ${help} kanalında /ticket. Proje paylaşmak için ${projects}.`,
-      "Depo kartı: `/github` · Doküman: `/dokuman`",
-    ].join("\n"));
+      help ? `Soru için ${help} veya /ticket.` : "Soru için /ticket.",
+      projects ? `Proje paylaşmak için ${projects}.` : null,
+      "Depo kartı: `/github` · Doküman: `/dokuman` · Kod: `/calistir`",
+    ].filter(Boolean).join("\n"));
   if (!options.length) {
     return { embeds: [embed.setDescription("Dil rolleri henüz yok. Sunucu sahibi `/kurulum` çalıştırmalı.")] };
   }

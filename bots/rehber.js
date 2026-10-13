@@ -23,6 +23,7 @@ startBot({
   name: "Portico",
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
@@ -66,7 +67,6 @@ startBot({
         const yardim = getGuild(thread.guildId)?.channels?.yardim;
         if (!yardim || thread.parentId !== yardim) return;
         const starter = await thread.fetchStarterMessage().catch(() => null);
-        await thread.send("Arcade, Source, bu başlığa bir bakın.");
         emit("help.opened", {
           guildId: thread.guildId,
           threadId: thread.id,

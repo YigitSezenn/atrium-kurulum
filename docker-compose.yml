@@ -1,12 +1,4 @@
 services:
-  yt-cipher:
-    image: ghcr.io/kikkia/yt-cipher:master
-    pull_policy: always
-    container_name: yt-cipher
-    restart: unless-stopped
-    environment:
-      - OVERRIDE_PLAYER_VARIANT=IAS
-
   lavalink:
     image: ghcr.io/lavalink-devs/lavalink:4-alpine
     container_name: lavalink
@@ -17,8 +9,6 @@ services:
       - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
     ports:
       - "127.0.0.1:2333:2333"
-    depends_on:
-      - yt-cipher
 
   atrium:
     build: .
@@ -29,6 +19,7 @@ services:
     environment:
       LAVALINK_URL: http://lavalink:2333
       LAVALINK_PASSWORD: atrium-ses
+      YT_BRIDGE_URL: http://atrium:4100
     depends_on:
       - lavalink
     volumes:

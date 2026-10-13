@@ -7,6 +7,10 @@ const { sendLog, baseEmbed } = require("../log");
 const { mention } = require("../liveChannel");
 
 const bannerPath = path.join(__dirname, "..", "..", "assets", "welcome.gif");
+const greetPath = path.join(__dirname, "..", "..", "assets", "karsilama.gif");
+const GREET_COLOR = 0xff4655;
+const VOICE_GAP = 60_000;
+const voiceSeen = new Map();
 
 function bannerFile() {
   if (!fs.existsSync(bannerPath)) {
@@ -15,16 +19,20 @@ function bannerFile() {
   return new AttachmentBuilder(bannerPath, { name: "welcome.gif" });
 }
 
+function greetFiles() {
+  return fs.existsSync(greetPath) ? [new AttachmentBuilder(greetPath, { name: "karsilama.gif" })] : [];
+}
+
 function welcomeEmbed(guild, member) {
   const saved = getGuild(guild.id)?.channels || {};
   const rules = mention(guild, saved.kurallar, "kurallar kanalı");
-  const stack = mention(guild, saved.yigin, "dil rolü kanalı");
-  const help = mention(guild, saved.yardim, "yardım kanalı");
+  const stack = mention(guild, saved.yigin, null);
+  const help = mention(guild, saved.yardim, null);
   const embed = new EmbedBuilder()
-    .setColor(0xf1c40f)
+    .setColor(GREET_COLOR)
     .setAuthor({ name: guild.name, iconURL: guild.iconURL({ size: 128 }) || undefined })
     .setTimestamp();
-  if (fs.existsSync(bannerPath)) embed.setImage("attachment://welcome.gif");
+  if (fs.existsSync(greetPath)) embed.setImage("attachment://karsilama.gif");
 
   if (member) {
     embed
@@ -34,18 +42,20 @@ function welcomeEmbed(guild, member) {
         `${member}, ${guild.name} kapısından içeri girdi.`,
         "Burası yazılım topluluğu. Kod, proje ve birlikte çalışma var.",
         `${rules} kanalındaki butona basınca topluluk kanalları açılır.`,
-        `Dil rolünü ${stack} kanalından al. Takıldığın yeri /ticket ile aç.`,
+        stack ? `Dil rolünü ${stack} kanalından al.` : null,
+        "Takıldığın yeri /ticket ile aç. Yazılım komutları her kanalda çalışır.",
         `Şu an **${guild.memberCount}** kişiyiz.`,
-      ].join("\n"));
+      ].filter(Boolean).join("\n"));
   } else {
     embed
       .setTitle(guild.name)
       .setDescription([
         "Yazılım konuşulur, proje paylaşılır, birlikte kod yazılır.",
         `${rules} kanalındaki butona bas, Üye rolünü al.`,
-        `Dil rolü için ${stack}. Soru için ${help}.`,
-        "Müzik için bir ses kanalına girip `/muzik cal` yaz. İstediğin ses kanalını komutta da seçebilirsin.",
-      ].join("\n"));
+        stack ? `Dil rolü için ${stack}.` : null,
+        help ? `Soru için ${help} ya da /ticket.` : "Soru için /ticket. `/github`, `/dokuman`, `/calistir` her kanalda çalışır.",
+        "Müzik için bir ses kanalına girip `/cal` yaz. YouTube, Spotify veya SoundCloud linki ya da şarkı adı olur.",
+      ].filter(Boolean).join("\n"));
   }
 
   return embed;
@@ -53,15 +63,16 @@ function welcomeEmbed(guild, member) {
 
 function memberWelcome(member) {
   const embed = new EmbedBuilder()
-    .setColor(0xf1c40f)
+    .setColor(GREET_COLOR)
     .setAuthor({ name: member.guild.name, iconURL: member.guild.iconURL({ size: 128 }) || undefined })
     .setTitle(`Hoş geldin, ${member.displayName}`)
     .setThumbnail(member.displayAvatarURL({ size: 256 }))
-    .setImage("attachment://welcome.gif")
     .setFooter({ text: `${member.guild.memberCount} kişi · Kurallar kanalındaki butona bas` })
     .setTimestamp();
+  const files = greetFiles();
+  if (files.length) embed.setImage("attachment://karsilama.gif");
 
-  return { embeds: [embed], files: [bannerFile()] };
+  return { embeds: [embed], files };
 }
 
 async function handleAccept(interaction) {
@@ -93,11 +104,11 @@ async function postWelcomeCard(guild) {
     || await guild.channels.fetch(channelId).catch(() => null);
   if (!channel?.isTextBased()) return null;
 
-  const payload = { embeds: [welcomeEmbed(guild)], files: [bannerFile()] };
+  const payload = { embeds: [welcomeEmbed(guild)], files: greetFiles() };
   const existingId = getGuild(guild.id)?.welcomeMessageId;
   if (existingId) {
     const existing = await channel.messages.fetch(existingId).catch(() => null);
-    if (existing) return existing.edit(payload);
+    if (existing) return existing.edit({ ...payload, attachments: [] });
   }
 
   const message = await channel.send(payload);
@@ -126,13 +137,33 @@ async function announceWelcome(member, left) {
     });
     return;
   }
-  const files = fs.existsSync(bannerPath) ? [bannerFile()] : [];
   await welcome.send({
     content: `hoşgeldin ${personName(member)}`,
     embeds: [welcomeEmbed(member.guild, member)],
-    files,
+    files: greetFiles(),
   }).catch((error) => {
     console.error("Karşılama yazılamadı:", error.message);
+  });
+}
+
+async function announceVoice(member, channel, joined) {
+  const key = `${member.guild.id}:${member.id}:${joined ? "in" : "out"}`;
+  const last = voiceSeen.get(key) || 0;
+  if (Date.now() - last < VOICE_GAP) return;
+  voiceSeen.set(key, Date.now());
+  if (voiceSeen.size > 500) {
+    for (const [entry, at] of voiceSeen) if (Date.now() - at > VOICE_GAP) voiceSeen.delete(entry);
+  }
+  const welcome = await welcomeChannel(member.guild);
+  if (!welcome) return;
+  const embed = new EmbedBuilder()
+    .setColor(joined ? 0x2ecc71 : 0x95a5a6)
+    .setAuthor({ name: personName(member), iconURL: member.displayAvatarURL({ size: 64 }) })
+    .setDescription(joined
+      ? `${member}, ${channel} ses kanalına girdi. Hoş geldin!`
+      : `${member}, ${channel} ses kanalından çıktı. Görüşürüz!`);
+  await welcome.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch((error) => {
+    console.error("Ses karşılaması yazılamadı:", error.message);
   });
 }
 
@@ -152,6 +183,14 @@ function registerWelcome(client) {
       "giris-log",
       baseEmbed(0x2ecc71, "Giriş", `${member} katıldı.\nHesap: <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`),
     );
+  });
+
+  client.on("voiceStateUpdate", async (oldState, newState) => {
+    const member = newState.member || oldState.member;
+    if (!member || member.user?.bot) return;
+    if (oldState.channelId === newState.channelId) return;
+    if (!oldState.channelId && newState.channel) await announceVoice(member, newState.channel, true);
+    else if (oldState.channel && !newState.channelId) await announceVoice(member, oldState.channel, false);
   });
 
   client.on("guildMemberRemove", async (member) => {

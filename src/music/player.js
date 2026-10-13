@@ -1,4 +1,5 @@
-const { registerGuild, join, play, stopTrack, setPaused, setVolume, destroy, loadTrack } = require("./lavalink");
+const { UserError } = require("../errors");
+const node = require("./node");
 
 const queues = new Map();
 const MAX_QUEUE = 25;
@@ -7,8 +8,9 @@ const IDLE_AFTER = 20 * 60 * 1000;
 const EMPTY_AFTER = 20_000;
 
 class GuildPlayer {
-  constructor(guildId) {
+  constructor(guildId, api = node) {
     this.guildId = guildId;
+    this.api = api;
     this.queue = [];
     this.backlog = [];
     this.current = null;
@@ -19,20 +21,14 @@ class GuildPlayer {
     this.manual = false;
     this.repeat = false;
     this.generation = 0;
-    this.mediaRetries = 0;
     this.emptyTimer = null;
     this.idleTimer = null;
     this.status = "idle";
     this.anchorMs = 0;
     this.anchorAt = null;
-    registerGuild(guildId, {
-      onEnd: (reason) => {
-        if (reason !== "finished") return;
-        this.onIdle().catch((error) => console.error("Sıra ilerletilemedi:", error));
-      },
-      onException: (message) => {
-        this.recover(message).catch((error) => console.error("Sıra ilerletilemedi:", error));
-      },
+    api.registerGuild(guildId, {
+      onEnd: () => Promise.resolve(this.onIdle()).catch((error) => console.error("Sıra ilerletilemedi:", error.message)),
+      onException: () => Promise.resolve(this.fail()).catch((error) => console.error("Sıra ilerletilemedi:", error.message)),
       onPosition: (position) => {
         if (this.status !== "playing") return;
         this.anchorMs = Number(position) || 0;
@@ -56,7 +52,12 @@ class GuildPlayer {
   async connect(voiceChannel) {
     this.leaving = false;
     this.voiceChannelId = voiceChannel.id;
-    await join(voiceChannel.guild.id, voiceChannel.id);
+    try {
+      await this.api.join(voiceChannel.guild.id, voiceChannel.id);
+    } catch (error) {
+      console.error("Ses kanalına girilemedi:", error.message);
+      throw new UserError("Ses kanalına girilemedi. Biraz sonra yeniden dene.");
+    }
   }
 
   enqueue(track) {
@@ -66,8 +67,7 @@ class GuildPlayer {
   }
 
   async startIfIdle() {
-    const busy = Boolean(this.current) || this.status === "playing" || this.status === "paused";
-    if (busy) return;
+    if (this.current || this.status === "playing" || this.status === "paused") return;
     await this.playNext();
   }
 
@@ -76,10 +76,7 @@ class GuildPlayer {
     this.advancing = true;
     this.status = "idle";
     try {
-      const replay = this.repeat && this.current && !this.broken;
-      this.broken = false;
-      this.mediaRetries = 0;
-      if (replay) await this.playTrack(this.current);
+      if (this.repeat && this.current) await this.playTrack(this.current);
       else await this.playNext();
     } finally {
       this.advancing = false;
@@ -90,12 +87,20 @@ class GuildPlayer {
     this.clearTimer("idleTimer");
     const track = this.queue.shift();
     if (!track) {
-      if (this.status === "idle" && !this.topping) this.current = null;
-      if (!this.leaving && this.backlog?.length && !this.topping) {
+      if (!this.leaving && this.backlog?.length && !this.topping && !this.loading) {
         const { topUp } = require("./fill");
         await topUp(this);
       }
-      if (this.current || this.queue.length || this.topping) return;
+      if (this.status === "playing" || this.status === "paused") return;
+      if (this.queue.length) {
+        this.current = null;
+        return this.playNext();
+      }
+      if (this.topping) {
+        this.current = null;
+        return;
+      }
+      if (this.current && this.repeat) return;
       this.current = null;
       this.idleTimer = setTimeout(() => {
         this.idleTimer = null;
@@ -107,43 +112,17 @@ class GuildPlayer {
       await this.playTrack(track);
     } catch (error) {
       console.error("Parça başlatılamadı:", error.message);
-      if (this.leaving || this.status !== "idle") return;
+      if (this.leaving) return;
       if (this.current === track) this.current = null;
       await this.playNext();
     }
   }
 
-  positionMs() {
-    if (this.status === "playing" && this.anchorAt != null) {
-      return this.anchorMs + Math.max(0, Date.now() - this.anchorAt);
-    }
-    return this.anchorMs || 0;
-  }
-
-  async recover(message) {
-    if (this.leaving) return;
-    const text = String(message || "Parça çalınamadı.").replace(/\s+/g, " ").trim();
-    console.error("Parça çalınamadı:", text.slice(0, 500));
-    const track = this.current;
-    if (track && track.source !== "soundcloud" && !track.swapped && track.title) {
-      try {
-        const found = await loadTrack(`scsearch:${track.title}`);
-        track.encoded = found.encoded;
-        track.webpage = found.uri;
-        track.source = found.source || "soundcloud";
-        track.title = found.title.slice(0, 120);
-        track.duration = found.duration;
-        track.swapped = true;
-        this.textChannel?.send(`YouTube bu parçayı vermedi. SoundCloud'dan çalınıyor: **${track.title}**`).catch(() => {});
-        await this.playTrack(track, 0);
-        return;
-      } catch (error) {
-        console.error("SoundCloud yedeği açılmadı:", error.message);
-      }
-    }
-    this.broken = true;
+  async fail() {
+    if (this.leaving || this.manual) return;
     this.status = "idle";
-    this.textChannel?.send("Bu parça çalınamadı, sıradakine geçiyorum.").catch(() => {});
+    const sent = this.textChannel?.send("Bu şarkı açılmadı, sıradakine geçiyorum.");
+    if (typeof sent?.catch === "function") sent.catch(() => {});
     await this.playNext();
   }
 
@@ -151,9 +130,9 @@ class GuildPlayer {
     this.clearTimer("idleTimer");
     const generation = ++this.generation;
     this.current = track;
-    if (!this.voiceChannelId) throw new Error("Ses kanalı yok.");
+    if (!this.voiceChannelId) throw new UserError("Ses kanalı yok.");
     const start = Math.max(0, Number(offsetMs) || 0);
-    await play(this.guildId, track.encoded, start, this.volume * 100);
+    await this.api.play(this.guildId, track.encoded, start, Math.round(this.volume * 100));
     if (generation !== this.generation || this.leaving) return;
     this.status = "playing";
     this.anchorMs = start;
@@ -171,11 +150,11 @@ class GuildPlayer {
   skip() {
     this.manual = true;
     this.status = "idle";
-    stopTrack(this.guildId)
+    this.api.stopTrack(this.guildId)
       .catch((error) => console.error("Parça durdurulamadı:", error.message))
       .finally(() => {
         this.manual = false;
-        this.playNext().catch((error) => console.error("Sıra ilerletilemedi:", error));
+        this.playNext().catch((error) => console.error("Sıra ilerletilemedi:", error.message));
       });
   }
 
@@ -204,7 +183,7 @@ class GuildPlayer {
     this.anchorMs = this.positionMs();
     this.anchorAt = null;
     this.status = "paused";
-    setPaused(this.guildId, true);
+    this.api.setPaused(this.guildId, true);
     return true;
   }
 
@@ -212,14 +191,21 @@ class GuildPlayer {
     if (this.status !== "paused") return false;
     this.anchorAt = Date.now();
     this.status = "playing";
-    setPaused(this.guildId, false);
+    this.api.setPaused(this.guildId, false);
     return true;
   }
 
+  positionMs() {
+    if (this.status === "playing" && this.anchorAt != null) {
+      return this.anchorMs + Math.max(0, Date.now() - this.anchorAt);
+    }
+    return this.anchorMs || 0;
+  }
+
   setVolume(level) {
-    this.volume = level;
+    this.volume = Math.max(0, Math.min(1, Number(level) || 0));
     if (this.status === "idle") return;
-    setVolume(this.guildId, level * 100);
+    this.api.setVolume(this.guildId, Math.round(this.volume * 100));
   }
 
   stop() {
@@ -238,19 +224,22 @@ class GuildPlayer {
   }
 
   disconnect() {
-    const guildId = this.guildId;
     this.voiceChannelId = null;
-    destroy(guildId).catch(() => {});
+    this.api.destroy(this.guildId).catch(() => {});
   }
 }
 
-function stopAll() {
-  for (const player of queues.values()) player.stop();
+function createGuildPlayer(guildId, api) {
+  return new GuildPlayer(guildId, api);
 }
 
 function getPlayer(guildId) {
   if (!queues.has(guildId)) queues.set(guildId, new GuildPlayer(guildId));
   return queues.get(guildId);
+}
+
+function stopAll() {
+  for (const player of queues.values()) player.stop();
 }
 
 function watchVoice(client) {
@@ -273,4 +262,4 @@ function watchVoice(client) {
   });
 }
 
-module.exports = { getPlayer, stopAll, watchVoice, MAX_QUEUE, LIST_CAP };
+module.exports = { getPlayer, createGuildPlayer, stopAll, watchVoice, MAX_QUEUE, LIST_CAP };

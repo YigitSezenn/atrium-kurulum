@@ -1,14 +1,24 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { UserError } = require("../errors");
-const { resolveTrack, formatDuration } = require("./resolve");
+const { playingCard } = require("./card");
+const { resolveTrack } = require("./resolve");
 
-const BUSY = "Bir liste sıraya giriyor. Bitene kadar /muzik cal ve /spotify cal çalışmaz.";
+const BUSY = "Şu an bir şarkı aranıyor. Birkaç saniye bekle, sonra tekrar yaz.";
 
-function controlRow() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("muzik:skip").setLabel("Geç").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("muzik:stop").setLabel("Durdur").setStyle(ButtonStyle.Danger),
-  );
+function requestOf(query) {
+  return typeof query === "string" ? { text: query } : (query || { text: "" });
+}
+
+function present(found, request, requesterId) {
+  const track = { ...found, requesterId };
+  if (!track.service) track.service = track.source === "http" ? "youtube" : track.source;
+  if (!track.page) track.page = track.webpage || "";
+  if (request.service !== "spotify") return track;
+  track.service = "spotify";
+  if (request.title) track.title = String(request.title).slice(0, 120);
+  if (request.artist) track.artist = String(request.artist).slice(0, 80);
+  track.page = request.link || "";
+  if (request.image) track.thumbnail = request.image;
+  return track;
 }
 
 function claim(player) {
@@ -42,12 +52,13 @@ async function topUp(player) {
       const next = player.backlog.shift();
       if (!next) return;
       try {
-        const found = await resolveTrack(next.query);
+        const request = requestOf(next.query);
+        const found = await resolveTrack(request.text);
         if (player.loadGeneration !== token || player.leaving) {
           player.backlog.unshift(next);
           return;
         }
-        if (!player.enqueue({ ...found, requesterId: next.requesterId })) {
+        if (!player.enqueue(present(found, request, next.requesterId))) {
           player.backlog.unshift(next);
           return;
         }
@@ -66,9 +77,9 @@ async function fillQueries(player, interaction, queries, requesterId) {
   const wasPlaying = Boolean(player.current);
   const many = queries.length > 1;
   if (many) {
-    await interaction.editReply(`Liste ${queries.length} parça. İlki aranıyor. Kalanlar çaldıkça eklenecek.`);
+    await interaction.editReply(`${queries.length} şarkı var. İlki hazırlanıyor, kalanlar çaldıkça eklenecek.`);
   } else {
-    await interaction.editReply("Şarkı aranıyor. Bitene kadar yeni çalma komutu alınmaz.");
+    await interaction.editReply("Şarkı aranıyor…");
   }
 
   const added = [];
@@ -77,12 +88,12 @@ async function fillQueries(player, interaction, queries, requesterId) {
 
   while (index < queries.length && !added.length) {
     if (player.loadGeneration !== token) return { added, skipped, waiting: player.backlog.length, cancelled: true };
-    const query = queries[index];
+    const request = requestOf(queries[index]);
     index += 1;
     try {
-      const found = await resolveTrack(query);
+      const found = await resolveTrack(request.text);
       if (player.loadGeneration !== token) return { added, skipped, waiting: player.backlog.length, cancelled: true };
-      const track = { ...found, requesterId };
+      const track = present(found, request, requesterId);
       if (!player.enqueue(track)) {
         index -= 1;
         break;
@@ -100,15 +111,13 @@ async function fillQueries(player, interaction, queries, requesterId) {
     player.backlog.push(...queries.slice(index).map((query) => ({ query, requesterId })));
   }
 
-  if (!added.length && !player.backlog.length) throw new UserError("Parça bulunamadı. Başka bir ad veya bağlantı dene.");
+  if (!added.length && !player.backlog.length) throw new UserError("Bu şarkıyı bulamadım. Adını ya da bağlantısını kontrol edip tekrar dene.");
   if (player.loadGeneration === token && added.length) {
     const track = added[0];
-    const line = wasPlaying
-      ? `Sıraya eklendi: **${track.title}** (${formatDuration(track.duration)})`
-      : `Başlıyor: **${track.title}** (${formatDuration(track.duration)})`;
-    const rest = player.backlog.length ? ` Kalan ${player.backlog.length} parça çaldıkça eklenecek.` : "";
-    const missed = skipped ? ` ${skipped} parça bulunamadı.` : "";
-    await interaction.editReply({ content: `${line}${rest}${missed}`, components: [controlRow()] }).catch(() => {});
+    const notes = [];
+    if (player.backlog.length) notes.push(`Kalan ${player.backlog.length} şarkı çaldıkça eklenecek.`);
+    if (skipped) notes.push(`${skipped} şarkı bulunamadı, onlar atlandı.`);
+    await interaction.editReply(playingCard(track, player, { queued: wasPlaying, note: notes.join(" ") })).catch(() => {});
   }
   return { added, skipped, waiting: player.backlog.length, cancelled: player.loadGeneration !== token };
 }

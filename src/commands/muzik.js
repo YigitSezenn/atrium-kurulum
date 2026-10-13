@@ -2,8 +2,10 @@ const { EmbedBuilder, SlashCommandBuilder, ChannelType } = require("discord.js")
 const { getGuild, updateGuild } = require("../store");
 const { levelOf, sameVoice } = require("../staff");
 const { UserError } = require("../errors");
+const { playlistId, playlistVideos } = require("../music/invidious");
 const { spotifyQueries } = require("../music/spotify");
 const { getPlayer, LIST_CAP } = require("../music/player");
+const { playingCard } = require("../music/card");
 const { guard, fillQueries } = require("../music/fill");
 
 const LIST_MAX = 25;
@@ -19,17 +21,50 @@ function savedList(entry) {
 }
 
 function listEmbed(lines, title) {
-  const description = lines.length ? lines.join("\n").slice(0, 4000) : "Liste boş. `/muzik ekle` ile şarkı yaz.";
+  const description = lines.length ? lines.join("\n").slice(0, 4000) : "Liste boş. Şarkı eklemek için `/muzik ekle` yaz.";
   return new EmbedBuilder().setColor(0x9b59b6).setTitle(title).setDescription(description);
+}
+
+function songOption(option) {
+  return option
+    .setName("sarki")
+    .setDescription("Link yapıştır ya da şarkı yaz. YouTube, Spotify, SoundCloud. Çoklu için |")
+    .setRequired(true)
+    .setMaxLength(1000);
+}
+
+function voiceOption(option) {
+  return option
+    .setName("kanal")
+    .setDescription("Boş bırakırsan bulunduğun ses kanalına girerim.")
+    .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice);
 }
 
 async function collectQueries(text) {
   const parts = splitSongs(text);
-  if (!parts.length) throw new UserError("Şarkı adı yaz.");
+  if (!parts.length) throw new UserError("Ne çalacağını yaz. Şarkı adı ya da link olur.");
   const queries = [];
   for (const part of parts) {
-    const spotify = await spotifyQueries(part);
-    queries.push(...(spotify?.queries?.length ? spotify.queries : [part]));
+    if (playlistId(part)) {
+      queries.push(...(await playlistVideos(part, LIST_CAP - queries.length)).map((text) => ({ text })));
+    } else {
+      const spotify = await spotifyQueries(part);
+      if (spotify?.queries?.length) {
+        for (let index = 0; index < spotify.queries.length && queries.length < LIST_CAP; index += 1) {
+          const meta = spotify.meta?.[index] || {};
+          queries.push({
+            text: spotify.queries[index],
+            service: "spotify",
+            title: meta.title || "",
+            artist: meta.artist || "",
+            link: meta.link || "",
+            image: meta.image || "",
+          });
+        }
+      } else {
+        queries.push({ text: part });
+      }
+    }
     if (queries.length >= LIST_CAP) break;
   }
   return queries.slice(0, LIST_CAP);
@@ -38,7 +73,7 @@ async function collectQueries(text) {
 function voiceOrThrow(interaction) {
   const channel = interaction.member.voice?.channel;
   if (!channel || ![ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(channel.type)) {
-    throw new UserError("Önce bir ses kanalına gir veya komutta kanal seç.");
+    throw new UserError("Önce bir ses kanalına gir. İstersen komutta kanal da seçebilirsin.");
   }
   return channel;
 }
@@ -47,7 +82,7 @@ function chosenVoice(interaction) {
   const picked = interaction.options.getChannel("kanal");
   if (!picked) return voiceOrThrow(interaction);
   if (![ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(picked.type)) {
-    throw new UserError("Ses kanalı seç.");
+    throw new UserError("Seçtiğin kanal bir ses kanalı değil.");
   }
   return picked;
 }
@@ -65,35 +100,35 @@ function soleHuman(member) {
 
 function canControl(member, player) {
   if (!sameVoice(member, player.channelId) && player.channelId) {
-    throw new UserError("Botun olduğu ses kanalında olmalısın.");
+    throw new UserError("Bunu yapmak için botla aynı ses kanalında olmalısın.");
   }
   const ownsTrack = player.current?.requesterId === member.id;
   if (canDj(member) || ownsTrack || soleHuman(member)) return;
-  throw new UserError("Bu şarkıyı yalnız isteyen kişi, DJ veya yetkili yönetebilir.");
+  throw new UserError("Bu şarkıyı sadece onu açan kişi, DJ ya da yetkili geçebilir.");
 }
 
 function replySkip(interaction, player) {
   const upcoming = player.queue[0]?.title;
   player.skip();
-  const content = upcoming ? `Geçildi. Sıradaki: **${upcoming}**` : "Geçildi.";
+  const content = upcoming ? `Geçildi. Sıradaki: **${upcoming}**` : "Geçildi. Sırada başka şarkı yok.";
   return interaction.reply(content);
 }
 
 async function handleMusicButton(interaction) {
   const player = getPlayer(interaction.guildId);
   if (interaction.customId === "muzik:stop") {
-    if (!player.current && !player.queue.length) throw new UserError("Çalan bir parça yok.");
+    if (!player.current && !player.queue.length) throw new UserError("Şu an çalan bir şarkı yok.");
     if (!sameVoice(interaction.member, player.channelId)) {
-      throw new UserError("Botun olduğu ses kanalında olmalısın.");
+      throw new UserError("Bunu yapmak için botla aynı ses kanalında olmalısın.");
     }
     if (!canDj(interaction.member) && !soleHuman(interaction.member)) {
-      throw new UserError("Sırayı yalnız DJ, yetkili veya kanalda tek başına olan kişi kapatabilir.");
+      throw new UserError("Müziği kapatmak için DJ olman, yetkili olman ya da kanalda tek başına olman gerekir.");
     }
     player.stop();
-    await interaction.reply("Müzik kapatıldı.");
+    await interaction.reply("Müziği kapattım ve ses kanalından çıktım.");
     return;
   }
-  if (!player.current) throw new UserError("Çalan bir parça yok.");
+  if (!player.current) throw new UserError("Şu an çalan bir şarkı yok.");
   canControl(interaction.member, player);
   await replySkip(interaction, player);
 }
@@ -105,25 +140,37 @@ const skip = {
 
   async execute(interaction) {
     const player = getPlayer(interaction.guildId);
-    if (!player.current) throw new UserError("Çalan bir parça yok.");
+    if (!player.current) throw new UserError("Şu an çalan bir şarkı yok.");
     canControl(interaction.member, player);
     await replySkip(interaction, player);
+  },
+};
+
+const cal = {
+  data: new SlashCommandBuilder()
+    .setName("cal")
+    .setDescription("YouTube, Spotify veya SoundCloud linkiyle ya da şarkı adıyla çalar.")
+    .addStringOption(songOption)
+    .addChannelOption(voiceOption),
+
+  async execute(interaction) {
+    await playNow(interaction, getPlayer(interaction.guildId));
   },
 };
 
 const muzik = {
   data: new SlashCommandBuilder()
     .setName("muzik")
-    .setDescription("Sıra, liste, atlama ve ses kontrolü.")
+    .setDescription("Sırayı, sesi ve kayıtlı listeyi yönetir. Çalmak için /cal yaz.")
     .addSubcommand((sub) => sub
       .setName("cal")
-      .setDescription("Şarkı çalar veya kuyruğa ekler. Sonrakini | ile yaz.")
-      .addStringOption((option) => option.setName("sorgu").setDescription("Şarkı adı veya bağlantı. Birden fazlaysa | ile ayır").setRequired(true).setMaxLength(1000))
-      .addChannelOption((option) => option.setName("kanal").setDescription("Botun gireceği ses kanalı. Boşsa senin olduğun kanal.").addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)))
+      .setDescription("Link ya da şarkı adıyla çalar. Kısayol: /cal")
+      .addStringOption(songOption)
+      .addChannelOption(voiceOption))
     .addSubcommand((sub) => sub
       .setName("ekle")
-      .setDescription("Şarkıyı kalıcı listeye ekler. Sonrakini | ile yaz.")
-      .addStringOption((option) => option.setName("sarki").setDescription("Şarkı adı veya bağlantı. Birden fazlaysa | ile ayır").setRequired(true).setMaxLength(1000)))
+      .setDescription("Şarkıyı kayıtlı listeye ekler. Çalmaz, sadece saklar.")
+      .addStringOption((option) => option.setName("sarki").setDescription("Link ya da şarkı adı. YouTube, Spotify, SoundCloud. Çoklu için |").setRequired(true).setMaxLength(1000)))
     .addSubcommand((sub) => sub.setName("liste").setDescription("Kayıtlı şarkı listesini gösterir."))
     .addSubcommand((sub) => sub
       .setName("cikar")
@@ -133,7 +180,7 @@ const muzik = {
     .addSubcommand((sub) => sub
       .setName("liste-cal")
       .setDescription("Kayıtlı listedeki şarkıları sırayla çalar.")
-      .addChannelOption((option) => option.setName("kanal").setDescription("Botun gireceği ses kanalı. Boşsa senin olduğun kanal.").addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)))
+      .addChannelOption(voiceOption))
     .addSubcommand((sub) => sub.setName("gec").setDescription("Çalan şarkıyı geçer."))
     .addSubcommand((sub) => sub.setName("skip").setDescription("Çalan şarkıyı geçer."))
     .addSubcommand((sub) => sub.setName("durdur").setDescription("Sırayı temizler ve ses kanalından ayrılır."))
@@ -159,7 +206,7 @@ const muzik = {
 
     if (sub === "ekle") {
       const incoming = splitSongs(interaction.options.getString("sarki"));
-      if (!incoming.length) throw new UserError("Şarkı adı yaz.");
+      if (!incoming.length) throw new UserError("Ne ekleyeceğini yaz. Şarkı adı ya da link olur.");
       let added = [];
       let total = 0;
       await updateGuild(interaction.guildId, (entry) => {
@@ -169,11 +216,11 @@ const muzik = {
         entry.playlist = [...current, ...added];
         total = entry.playlist.length;
       });
-      if (!added.length) throw new UserError(`Liste dolu. En fazla ${LIST_MAX} şarkı.`);
+      if (!added.length) throw new UserError(`Liste dolu. En fazla ${LIST_MAX} şarkı ekleyebilirsin.`);
       const lines = [
-        ...added.map((item) => `Eklendi: **${item}**`),
-        incoming.length > added.length ? `${incoming.length - added.length} şarkı sığmadığı için eklenmedi.` : "",
-        `Listede **${total}** şarkı var. Çalmak için \`/muzik liste-cal\`.`,
+        ...added.map((item) => `**${item}** listeye eklendi.`),
+        incoming.length > added.length ? `${incoming.length - added.length} şarkı sığmadı, onlar eklenmedi.` : "",
+        `Listede **${total}** şarkı var. Çalmak için \`/muzik liste-cal\` yaz.`,
       ].filter(Boolean);
       await interaction.reply(lines.join("\n"));
       return;
@@ -189,7 +236,7 @@ const muzik = {
         entry.playlist = current;
       });
       if (!removed) throw new UserError("Bu numarada şarkı yok. `/muzik liste` ile bak.");
-      await interaction.reply(`Listeden çıktı: **${removed}**`);
+      await interaction.reply(`**${removed}** listeden çıktı.`);
       return;
     }
 
@@ -197,7 +244,7 @@ const muzik = {
       await updateGuild(interaction.guildId, (entry) => {
         entry.playlist = [];
       });
-      await interaction.reply("Şarkı listesi temizlendi.");
+      await interaction.reply("Kayıtlı liste temizlendi.");
       return;
     }
 
@@ -207,9 +254,9 @@ const muzik = {
       await interaction.deferReply();
       const voice = chosenVoice(interaction);
       await guard(player, async () => {
-        await interaction.editReply("Liste hazırlanıyor. Bitene kadar yeni çalma komutu alınmaz.");
+        await interaction.editReply("Listedeki şarkılar hazırlanıyor…");
         if (player.channelId && player.channelId !== voice.id && !canDj(interaction.member)) {
-          throw new UserError("Bot başka bir ses kanalında. Onu taşımak için DJ olmalısın.");
+          throw new UserError("Bot şu an başka bir ses kanalında. Taşımak için DJ olman gerekir.");
         }
         await player.connect(voice);
         player.textChannel = interaction.channel;
@@ -220,33 +267,26 @@ const muzik = {
     }
 
     if (sub === "kuyruk") {
-      const lines = [
-        player.current ? `Çalıyor: **${player.current.title}**${player.repeat ? " (döngü)" : ""}` : "Çalan parça yok.",
-        ...player.queue.slice(0, 10).map((track, index) => `${index + 1}. ${track.title}`),
-      ];
-      if (player.queue.length > 10) lines.push(`+${player.queue.length - 10} parça daha`);
-      if (player.backlog?.length) lines.push(`Çaldıkça yüklenecek: ${player.backlog.length} parça`);
-      await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x9b59b6).setTitle("Sıra").setDescription(lines.join("\n"))] });
+      const waiting = player.queue.slice(0, 10).map((track, index) => `${index + 1}. ${track.title}`);
+      if (player.queue.length > 10) waiting.push(`ve ${player.queue.length - 10} şarkı daha`);
+      if (player.backlog?.length) waiting.push(`${player.backlog.length} şarkı çaldıkça eklenecek`);
+      if (player.repeat && player.current) waiting.unshift("Döngü açık. Bu şarkı bitince başa sarar.");
+      if (!player.current) {
+        await interaction.reply(waiting.length
+          ? { embeds: [listEmbed(waiting, "Sıra")] }
+          : "Şu an çalan bir şarkı yok. Başlatmak için `/cal` yaz. Link ya da şarkı adı olur.");
+        return;
+      }
+      await interaction.reply(playingCard(player.current, player, { note: waiting.join("\n") }));
       return;
     }
 
     if (sub === "cal") {
-      await interaction.deferReply();
-      const voice = chosenVoice(interaction);
-      await guard(player, async () => {
-        await interaction.editReply("İstek alındı. Arama bitene kadar yeni çalma komutu alınmaz.");
-        const queries = await collectQueries(interaction.options.getString("sorgu"));
-        if (player.channelId && player.channelId !== voice.id && !canDj(interaction.member)) {
-          throw new UserError("Bot başka bir ses kanalında. Onu taşımak için DJ olmalısın.");
-        }
-        await player.connect(voice);
-        player.textChannel = interaction.channel;
-        await fillQueries(player, interaction, queries, interaction.user.id);
-      });
+      await playNow(interaction, player);
       return;
     }
 
-    if (!player.current && sub !== "durdur") throw new UserError("Çalan bir parça yok.");
+    if (!player.current && sub !== "durdur") throw new UserError("Şu an çalan bir şarkı yok.");
     canControl(interaction.member, player);
 
     if (sub === "gec" || sub === "skip") {
@@ -254,38 +294,53 @@ const muzik = {
       return;
     }
     if (sub === "duraklat") {
-      await interaction.reply(player.pause() ? "Duraklatıldı." : "Duraklatılamadı.");
+      await interaction.reply(player.pause() ? "Duraklatıldı. Devam etmek için `/muzik devam` yaz." : "Şu an duraklatılacak bir şarkı yok.");
       return;
     }
     if (sub === "devam") {
-      await interaction.reply(player.resume() ? "Devam ediyor." : "Duraklatılmış değil.");
+      await interaction.reply(player.resume() ? "Şarkı devam ediyor." : "Şarkı zaten çalıyor.");
       return;
     }
     if (sub === "dongu") {
       const on = player.toggleRepeat();
-      await interaction.reply(on ? "Döngü açık. Bu parça bitince başa sarar." : "Döngü kapalı.");
+      await interaction.reply(on ? "Döngü açık. Bu şarkı bitince yeniden başlar." : "Döngü kapalı.");
       return;
     }
     if (sub === "basa") {
       player.restart();
-      await interaction.reply("Başa sarıldı.");
+      await interaction.reply("Şarkı başa sarıldı.");
       return;
     }
     if (sub === "ses") {
-      if (!canDj(interaction.member)) throw new UserError("Sesi DJ veya yetkili ayarlar.");
+      if (!canDj(interaction.member)) throw new UserError("Sesi değiştirmek için DJ ya da yetkili olman gerekir.");
       const percent = interaction.options.getInteger("seviye");
       player.setVolume(percent / 100);
-      await interaction.reply(`Ses %${percent} oldu.`);
+      await interaction.reply(`Ses seviyesi %${percent}.`);
       return;
     }
     if (sub === "durdur") {
       if (!canDj(interaction.member) && !soleHuman(interaction.member)) {
-        throw new UserError("Sırayı yalnız DJ, yetkili veya kanalda tek başına olan kişi kapatabilir.");
+        throw new UserError("Müziği kapatmak için DJ olman, yetkili olman ya da kanalda tek başına olman gerekir.");
       }
       player.stop();
-      await interaction.reply("Müzik kapatıldı.");
+      await interaction.reply("Müziği kapattım ve ses kanalından çıktım.");
     }
   },
 };
 
-module.exports = { commands: [muzik, skip], handleMusicButton };
+async function playNow(interaction, player) {
+  await interaction.deferReply();
+  const voice = chosenVoice(interaction);
+  await guard(player, async () => {
+    await interaction.editReply("Şarkı aranıyor…");
+    const queries = await collectQueries(interaction.options.getString("sarki"));
+    if (player.channelId && player.channelId !== voice.id && !canDj(interaction.member)) {
+      throw new UserError("Bot şu an başka bir ses kanalında. Taşımak için DJ olman gerekir.");
+    }
+    await player.connect(voice);
+    player.textChannel = interaction.channel;
+    await fillQueries(player, interaction, queries, interaction.user.id);
+  });
+}
+
+module.exports = { commands: [cal, muzik, skip], handleMusicButton };

@@ -26,12 +26,69 @@ const CLOSE = "ticket:close";
 const CLOSE_YES = "ticket:close-yes";
 const CLOSE_NO = "ticket:close-no";
 const REOPEN = "ticket:reopen";
+const TAKE = "ticket:take:";
+const JOIN = "ticket:join:";
+const PING_ROLES = ["Moderatör", "Denetçi"];
+
+function staffChannelId(guild) {
+  const channels = getGuild(guild.id)?.channels || {};
+  return liveId(guild, channels["ticket-bildirim"]) || liveId(guild, channels["yetkili-sohbet"]);
+}
+
+function staffRoleIds(guild) {
+  const roles = getGuild(guild.id)?.roles || {};
+  return PING_ROLES.map((key) => roles[key]).filter((id) => id && guild.roles.cache.has(id));
+}
+
+function notifyPayload(threadId, record, url) {
+  const status = record.status !== "open"
+    ? "Kapandı"
+    : record.claimerId ? `<@${record.claimerId}> ilgileniyor` : "Bekliyor, kimse üstlenmedi";
+  const color = record.status !== "open" ? 0x95a5a6 : record.claimerId ? 0x3498db : 0xe67e22;
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(`🎫 ${record.konu}`.slice(0, 250))
+    .setDescription((record.aciklama || "").slice(0, 1000) || null)
+    .addFields(
+      { name: "Açan", value: `<@${record.openerId}>`, inline: true },
+      { name: "Durum", value: status, inline: true },
+      { name: "Başlık", value: `<#${threadId}>`, inline: true },
+    )
+    .setTimestamp(record.openedAt);
+  const row = new ActionRowBuilder();
+  if (record.status === "open") {
+    if (!record.claimerId) {
+      row.addComponents(new ButtonBuilder().setCustomId(`${TAKE}${threadId}`).setLabel("Üstlen").setStyle(ButtonStyle.Success));
+    }
+    row.addComponents(new ButtonBuilder().setCustomId(`${JOIN}${threadId}`).setLabel("Başlığa katıl").setStyle(ButtonStyle.Secondary));
+  }
+  if (url) row.addComponents(new ButtonBuilder().setLabel("Başlığa git").setStyle(ButtonStyle.Link).setURL(url));
+  return { embeds: [embed], components: row.components.length ? [row] : [] };
+}
+
+async function refreshNotify(guild, threadId, record) {
+  if (!record.notifyChannelId || !record.notifyId) return;
+  const channel = guild.channels.cache.get(record.notifyChannelId)
+    || await guild.channels.fetch(record.notifyChannelId).catch(() => null);
+  const message = channel?.isTextBased() && await channel.messages.fetch(record.notifyId).catch(() => null);
+  if (!message) return;
+  const url = `https://discord.com/channels/${guild.id}/${threadId}`;
+  await message.edit(notifyPayload(threadId, record, url)).catch(() => {});
+}
 
 function isHelpChannel(channel) {
   if (!channel || channel.isThread?.()) return false;
   if (typeof channel.threads?.create !== "function") return false;
   const name = channel.name.toLocaleLowerCase("tr");
   return name.includes("yardim") || name.includes("yardım");
+}
+
+async function ticketParent(interaction) {
+  const found = await helpChannel(interaction.guild);
+  if (found) return found;
+  const here = interaction.channel?.isThread?.() ? interaction.channel.parent : interaction.channel;
+  if (typeof here?.threads?.create !== "function") throw new UserError("Bu kanalda başlık açılamıyor. Bir yazı kanalında dene.");
+  return here;
 }
 
 async function helpChannel(guild) {
@@ -92,29 +149,106 @@ function patchTicket(guildId, threadId, patch) {
   });
 }
 
+const fetchedGuilds = new Set();
+
+async function inviteBots(thread) {
+  const { guild } = thread;
+  const me = guild.members.me?.id;
+  if (!fetchedGuilds.has(guild.id)) {
+    await guild.members.fetch().catch(() => {});
+    fetchedGuilds.add(guild.id);
+  }
+  for (const member of guild.members.cache.values()) {
+    if (!member.user.bot || member.id === me) continue;
+    await thread.members.add(member.id).catch(() => {});
+  }
+}
+
 async function openThread(user, parent, konu, aciklama) {
   const already = await existingOpen(parent.guild, user.id);
   if (already) throw new UserError(`Açık başlığın var: ${already}`);
+  const { guild } = parent;
+  const staffId = staffChannelId(guild);
+  const roleIds = staffRoleIds(guild);
+  const pings = roleIds.map((id) => `<@&${id}>`).join(" ");
+  const hidden = Boolean(staffId);
   const thread = await parent.threads.create({
-    name: konu.slice(0, 100),
+    name: `🎫 ${konu}`.slice(0, 100),
     autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
-    type: ChannelType.PublicThread,
+    type: hidden ? ChannelType.PrivateThread : ChannelType.PublicThread,
+    ...(hidden ? { invitable: false } : {}),
     reason: `${user.tag} ticket`,
   });
   await thread.members.add(user.id).catch(() => {});
+  if (hidden) await inviteBots(thread);
   const message = await thread.send({
-    content: `<@${user.id}> Arcade, Source, bu başlığa bir bakın.\n\n${aciklama}`.slice(0, 1900),
+    content: hidden ? `<@${user.id}>` : `<@${user.id}> ${pings}`.trim(),
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xe67e22)
+        .setTitle(konu.slice(0, 250))
+        .setDescription(aciklama.slice(0, 4000))
+        .setFooter({ text: "Yetkililere haber verildi. Biri üstlenince burada yazacak." }),
+    ],
     components: controls(null),
+    allowedMentions: { users: [user.id], roles: hidden ? [] : roleIds },
   });
-  await saveTicket(parent.guild.id, thread.id, {
+  const record = {
     openerId: user.id,
     claimerId: null,
     controlId: message.id,
     status: "open",
     konu,
+    aciklama: aciklama.slice(0, 1000),
     openedAt: Date.now(),
-  });
+    notifyChannelId: staffId || null,
+    notifyId: null,
+  };
+  if (staffId) {
+    const staff = guild.channels.cache.get(staffId)
+      || await guild.channels.fetch(staffId).catch(() => null);
+    const notice = staff?.isTextBased() && await staff.send({
+      content: pings ? `${pings} yeni destek talebi.` : "Yeni destek talebi.",
+      ...notifyPayload(thread.id, record, thread.url),
+      allowedMentions: { roles: roleIds },
+    }).catch((error) => {
+      console.error("Ticket bildirimi yazılamadı:", error.message);
+      return null;
+    });
+    record.notifyId = notice?.id || null;
+    if (!record.notifyId) {
+      await parent.send({
+        content: `${pings || "Yetkililer"} yeni destek talebi: ${thread}`.trim(),
+        allowedMentions: { roles: roleIds },
+      }).catch(() => {});
+    }
+  }
+  await saveTicket(guild.id, thread.id, record);
   return thread;
+}
+
+async function staffJoin(interaction, take) {
+  const threadId = interaction.customId.slice((take ? TAKE : JOIN).length);
+  const record = getGuild(interaction.guildId)?.tickets?.[threadId];
+  if (!record) throw new UserError("Bu talep artık kayıtlı değil.");
+  if (!isStaff(interaction.member)) throw new UserError("Bunun için denetçi veya üstü rol gerekir.");
+  const thread = await interaction.guild.channels.fetch(threadId).catch(() => null);
+  if (!thread?.isThread?.()) throw new UserError("Başlık silinmiş.");
+  if (record.status !== "open") throw new UserError("Bu talep kapandı.");
+  await thread.members.add(interaction.user.id).catch(() => {});
+  if (!take) {
+    await interaction.reply({ content: `Başlığa eklendin: ${thread}`, flags: MessageFlags.Ephemeral });
+    await thread.send(`<@${interaction.user.id}> başlığa katıldı.`).catch(() => {});
+    return;
+  }
+  if (record.claimerId && record.claimerId !== interaction.user.id) {
+    throw new UserError(`Bunu <@${record.claimerId}> üstlendi. "Başlığa katıl" ile yardım edebilirsin.`);
+  }
+  record.claimerId = interaction.user.id;
+  await patchTicket(interaction.guildId, threadId, { claimerId: record.claimerId });
+  await interaction.update(notifyPayload(threadId, record, thread.url));
+  await editControls(thread, record);
+  await thread.send(`<@${interaction.user.id}> talebini üstlendi, seninle ilgilenecek. <@${record.openerId}>`).catch(() => {});
 }
 
 async function existingOpen(guild, userId) {
@@ -162,7 +296,7 @@ async function transcript(thread, record, closer) {
       return `[${when}] ${message.author.username}: ${text}`.slice(0, 400);
     });
   const body = lines.join("\n").slice(0, 12000) || "(mesaj yok)";
-  const staffId = liveId(thread.guild, getGuild(thread.guild.id)?.channels?.["yetkili-sohbet"]);
+  const staffId = staffChannelId(thread.guild);
   const staff = staffId && await thread.client.channels.fetch(staffId).catch(() => null);
   if (!staff?.isTextBased()) return false;
   const claim = record.claimerId ? `<@${record.claimerId}>` : "kimse üstlenmedi";
@@ -194,6 +328,7 @@ async function claim(interaction) {
   await patchTicket(interaction.guildId, thread.id, { claimerId: interaction.user.id });
   await interaction.update({ components: controls(record) });
   await thread.send(`Bunu <@${interaction.user.id}> üstlendi.`);
+  await refreshNotify(interaction.guild, thread.id, record);
 }
 
 async function unclaim(interaction) {
@@ -205,6 +340,7 @@ async function unclaim(interaction) {
   await patchTicket(interaction.guildId, thread.id, { claimerId: null });
   await interaction.update({ components: controls(record) });
   await thread.send("Üstlenme bırakıldı.");
+  await refreshNotify(interaction.guild, thread.id, record);
 }
 
 async function askClose(interaction) {
@@ -230,6 +366,7 @@ async function finishClose(interaction) {
   record.status = "closed";
   await patchTicket(interaction.guildId, thread.id, { status: "closed", claimerId: record.claimerId });
   await editControls(thread, record);
+  await refreshNotify(interaction.guild, thread.id, record);
   const note = saved
     ? "Kapandı. Konuşma yetkili kanalına yazıldı."
     : "Kapandı. Yetkili sohbet kanalı bağlı olmadığı için döküm yazılamadı.";
@@ -247,6 +384,7 @@ async function reopen(interaction) {
   record.status = "open";
   await patchTicket(interaction.guildId, thread.id, { status: "open" });
   await editControls(thread, record);
+  await refreshNotify(interaction.guild, thread.id, record);
   await interaction.update({ content: `<@${interaction.user.id}> başlığı yeniden açtı.`, components: [] });
 }
 
@@ -284,8 +422,7 @@ async function handleTicket(interaction, emit) {
     const konu = interaction.fields.getTextInputValue("konu").replace(/\s+/g, " ").trim();
     const aciklama = interaction.fields.getTextInputValue("aciklama").trim();
     if (!konu || !aciklama) throw new UserError("Konu ve açıklama gerekli.");
-    const parent = await helpChannel(interaction.guild);
-    if (!parent) throw new UserError("Yardım kanalını bulamadım.");
+    const parent = await ticketParent(interaction);
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const thread = await openThread(interaction.user, parent, konu, aciklama);
     emit("help.opened", {
@@ -298,7 +435,9 @@ async function handleTicket(interaction, emit) {
     return;
   }
   if (!interaction.isButton()) return;
-  if (id === CLAIM) await claim(interaction);
+  if (id.startsWith(TAKE)) await staffJoin(interaction, true);
+  else if (id.startsWith(JOIN)) await staffJoin(interaction, false);
+  else if (id === CLAIM) await claim(interaction);
   else if (id === UNCLAIM) await unclaim(interaction);
   else if (id === CLOSE) await askClose(interaction);
   else if (id === CLOSE_NO) await interaction.update({ content: "Kapatma iptal.", components: [] });
@@ -324,8 +463,7 @@ const ticket = {
     const konu = interaction.options.getString("konu", true).replace(/\s+/g, " ").trim();
     const aciklama = interaction.options.getString("aciklama", true).trim();
     if (!konu || !aciklama) throw new UserError("Konu ve açıklama gerekli.");
-    const parent = await helpChannel(interaction.guild);
-    if (!parent) throw new UserError("Yardım kanalını bulamadım.");
+    const parent = await ticketParent(interaction);
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const thread = await openThread(interaction.user, parent, konu, aciklama);
     emit("help.opened", {

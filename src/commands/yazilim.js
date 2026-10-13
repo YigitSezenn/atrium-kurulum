@@ -1,9 +1,13 @@
-const { EmbedBuilder, SlashCommandBuilder } = require("discord.js");
-const { getGuild } = require("../store");
+const {
+  ActionRowBuilder,
+  EmbedBuilder,
+  ModalBuilder,
+  SlashCommandBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+} = require("discord.js");
 const { UserError } = require("../errors");
-const { commandPlace, liveId, mention } = require("../liveChannel");
-
-const DEV_CHANNELS = ["projeler", "yigin", "yardim", "komutlar"];
+const { githubToken } = require("../config");
 
 const DOCS = [
   { name: "JavaScript", value: "javascript" },
@@ -19,19 +23,6 @@ const DOCS = [
   { name: "SQL", value: "sql" },
   { name: "npm", value: "npm" },
 ];
-
-function devChannelOrThrow(interaction) {
-  const channels = getGuild(interaction.guildId)?.channels || {};
-  const allowed = DEV_CHANNELS
-    .map((key) => liveId(interaction.guild, channels[key]))
-    .filter(Boolean);
-  if (allowed.length && !allowed.includes(commandPlace(interaction))) {
-    const hint = mention(interaction.guild, channels.projeler, null)
-      || mention(interaction.guild, channels.yigin, null)
-      || mention(interaction.guild, channels.yardim, null);
-    throw new UserError(hint ? `Bunu ${hint} kanalında kullan.` : "Bunu yazılım kanallarında kullan.");
-  }
-}
 
 function parseRepo(input) {
   const text = String(input || "").trim();
@@ -115,7 +106,9 @@ async function githubCard(parsed) {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "atrium-kurulum",
+      ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}),
     },
+    signal: AbortSignal.timeout(10_000),
   });
   if (response.status === 404) throw new UserError("Bu depo yok veya gizli.");
   if (!response.ok) throw new UserError("GitHub şu an yanıt vermedi. Biraz sonra tekrar dene.");
@@ -150,7 +143,6 @@ const github = {
       .setMaxLength(200)),
 
   async execute(interaction) {
-    devChannelOrThrow(interaction);
     const parsed = parseRepo(interaction.options.getString("depo"));
     if (!parsed) throw new UserError("Depoyu `owner/repo` veya GitHub bağlantısı olarak yaz.");
     await interaction.deferReply();
@@ -218,7 +210,6 @@ const dokuman = {
       .setMaxLength(100)),
 
   async execute(interaction) {
-    devChannelOrThrow(interaction);
     const kind = interaction.options.getString("dil");
     const query = interaction.options.getString("konu").trim();
     const label = DOCS.find((item) => item.value === kind)?.name || kind;
@@ -232,11 +223,142 @@ const dokuman = {
   },
 };
 
+const RUNNERS = [
+  { name: "Python", value: "python", language: "Python", prefer: /^cpython-3\./, fallback: "cpython-3.13.8" },
+  { name: "JavaScript", value: "javascript", language: "JavaScript", prefer: /^nodejs-/, fallback: "nodejs-20.17.0" },
+  { name: "TypeScript", value: "typescript", language: "TypeScript", prefer: /^typescript-/, fallback: "typescript-5.6.2" },
+  { name: "Lua", value: "lua", language: "Lua", prefer: /^lua-5\./, fallback: "lua-5.4.7" },
+  { name: "C", value: "c", language: "C", prefer: /^gcc-\d[\d.]*-c$/, fallback: "gcc-13.2.0-c" },
+  { name: "C++", value: "cpp", language: "C++", prefer: /^gcc-\d/, fallback: "gcc-13.2.0" },
+  { name: "C#", value: "csharp", language: "C#", prefer: /^mono-/, fallback: "mono-6.12.0.199" },
+  { name: "Java", value: "java", language: "Java", prefer: /^openjdk-/, fallback: "openjdk-jdk-22+36" },
+  { name: "Go", value: "go", language: "Go", prefer: /^go-/, fallback: "go-1.23.2" },
+  { name: "Rust", value: "rust", language: "Rust", prefer: /^rust-/, fallback: "rust-1.82.0" },
+  { name: "Ruby", value: "ruby", language: "Ruby", prefer: /^ruby-\d/, fallback: "ruby-3.4.9" },
+  { name: "PHP", value: "php", language: "PHP", prefer: /^php-/, fallback: "php-8.3.12" },
+  { name: "Bash", value: "bash", language: "Bash script", prefer: /^bash/, fallback: "bash" },
+  { name: "SQL (SQLite)", value: "sql", language: "SQL", prefer: /^sqlite-/, fallback: "sqlite-3.46.1" },
+];
+const WANDBOX = "https://wandbox.org/api";
+const RUN_TIMEOUT = 25_000;
+const RUN_GAP = 10_000;
+const lastRun = new Map();
+let compilerCache = { at: 0, list: null };
+
+async function compilerFor(runner) {
+  if (!compilerCache.list || Date.now() - compilerCache.at > 12 * 60 * 60 * 1000) {
+    try {
+      const response = await fetch(`${WANDBOX}/list.json`, { signal: AbortSignal.timeout(8000) });
+      if (response.ok) compilerCache = { at: Date.now(), list: await response.json() };
+    } catch {
+      compilerCache.at = Date.now();
+    }
+  }
+  const found = (compilerCache.list || []).find((item) => (
+    item.language === runner.language && runner.prefer.test(item.name) && !/head/.test(item.name)
+  ));
+  return found?.name || runner.fallback;
+}
+
+function prepare(runner, code) {
+  if (runner.value === "java") return code.replace(/\bpublic\s+(?=(?:final\s+|abstract\s+)?class\b)/g, "");
+  return code;
+}
+
+function block(text, limit) {
+  const clean = String(text || "").replace(/```/g, "`\u200b``");
+  const cut = clean.length > limit ? `${clean.slice(0, limit)}\n… (kısaltıldı)` : clean;
+  return `\`\`\`\n${cut || " "}\n\`\`\``;
+}
+
+const calistir = {
+  data: new SlashCommandBuilder()
+    .setName("calistir")
+    .setDescription("Kod parçasını güvenli bir ortamda çalıştırıp çıktısını gösterir.")
+    .addStringOption((option) => option
+      .setName("dil")
+      .setDescription("Kodun dili")
+      .setRequired(true)
+      .addChoices(...RUNNERS.map(({ name, value }) => ({ name, value })))),
+
+  async execute(interaction) {
+    const runner = RUNNERS.find((item) => item.value === interaction.options.getString("dil"));
+    if (!runner) throw new UserError("Bu dil desteklenmiyor.");
+    const modal = new ModalBuilder()
+      .setCustomId(`calistir:${runner.value}`)
+      .setTitle(`${runner.name} çalıştır`)
+      .addComponents(
+        new ActionRowBuilder().addComponents(new TextInputBuilder()
+          .setCustomId("kod")
+          .setLabel("Kod")
+          .setStyle(TextInputStyle.Paragraph)
+          .setMaxLength(4000)
+          .setRequired(true)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder()
+          .setCustomId("girdi")
+          .setLabel("Girdi (stdin, isteğe bağlı)")
+          .setStyle(TextInputStyle.Paragraph)
+          .setMaxLength(1000)
+          .setRequired(false)),
+      );
+    await interaction.showModal(modal);
+  },
+};
+
+async function handleRunModal(interaction) {
+  if (!interaction.isModalSubmit() || !interaction.customId.startsWith("calistir:")) return false;
+  const runner = RUNNERS.find((item) => item.value === interaction.customId.split(":")[1]);
+  if (!runner) throw new UserError("Bu dil desteklenmiyor.");
+  const wait = RUN_GAP - (Date.now() - (lastRun.get(interaction.user.id) || 0));
+  if (wait > 0) throw new UserError(`Biraz bekle. ${Math.ceil(wait / 1000)} saniye sonra tekrar çalıştırabilirsin.`);
+  lastRun.set(interaction.user.id, Date.now());
+  if (lastRun.size > 500) lastRun.delete(lastRun.keys().next().value);
+
+  const code = interaction.fields.getTextInputValue("kod");
+  const stdin = interaction.fields.getTextInputValue("girdi") || "";
+  await interaction.deferReply();
+  const started = Date.now();
+  let result;
+  try {
+    const response = await fetch(`${WANDBOX}/compile.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ compiler: await compilerFor(runner), code: prepare(runner, code), stdin }),
+      signal: AbortSignal.timeout(RUN_TIMEOUT),
+    });
+    if (!response.ok) throw new Error(`Wandbox ${response.status}`);
+    result = await response.json();
+  } catch (error) {
+    const timedOut = error.name === "TimeoutError";
+    console.error("Kod çalıştırılamadı:", error.message);
+    throw new UserError(timedOut
+      ? `Kod ${RUN_TIMEOUT / 1000} saniyede bitmedi. Sonsuz döngü olabilir.`
+      : "Kod çalıştırma servisi şu an yanıt vermedi. Biraz sonra tekrar dene.");
+  }
+
+  const status = Number(result.status);
+  const output = result.program_output || "";
+  const errors = [result.compiler_error, result.program_error].filter(Boolean).join("\n");
+  const killed = result.signal || status === 137;
+  const ok = status === 0 && !errors;
+  const embed = new EmbedBuilder()
+    .setColor(ok ? 0x2ecc71 : 0xe74c3c)
+    .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
+    .setTitle(`${runner.name} · ${killed ? "süre veya bellek sınırı aşıldı" : `çıkış kodu ${Number.isFinite(status) ? status : "?"}`}`)
+    .addFields({ name: "Kod", value: block(code, 700) });
+  if (output) embed.addFields({ name: "Çıktı", value: block(output, 900) });
+  if (errors) embed.addFields({ name: "Hata", value: block(errors, 900) });
+  if (!output && !errors) embed.addFields({ name: "Çıktı", value: "Çıktı yok." });
+  embed.setFooter({ text: `${((Date.now() - started) / 1000).toFixed(1)} sn · Wandbox` });
+  await interaction.editReply({ embeds: [embed] });
+  return true;
+}
+
 module.exports = {
-  commands: [github, dokuman, paket],
+  commands: [github, dokuman, paket, calistir],
+  handleRunModal,
   parseRepo,
   docUrl,
   suggestDocs,
   githubCard,
-  devChannelOrThrow,
 };

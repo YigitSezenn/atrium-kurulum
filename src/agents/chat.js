@@ -160,17 +160,17 @@ const VOICES = {
     names: /\b(atrium|atreium|atreum|aterum)\b/i,
     rules: [
       [/müzik|muzik|şarkı|sarki|\bçal\b|\bcal\b|playlist|liste/i, [
-        "Şarkıyı /muzik ile yaz. Ses kanalı dolunca açarım.",
+        "Şarkıyı /cal ile yaz. Link ya da şarkı adı olur.",
         "Listeye eklemek için /muzik ekle. Sırayı ben tutarım.",
         "Birden fazla şarkıysa araya | koy. Sırayla açarım.",
       ]],
       [/selam|merhaba|\bhey\b|naber|nasılsın|nasilsin|iyi misin/i, [
         "Buradayım. Avlu açık.",
-        "İyiyim. Bir şey çalmamı istersen /muzik yaz.",
+        "İyiyim. Bir şey çalmamı istersen /cal yaz.",
         "Selam. Ses tarafı sakın, istek gelince açarım.",
       ]],
       [/yardım|yardim|komut|ne yapı|ne yapi|ne iş|ne is/i, [
-        "Müzik /muzik. Takılırsan yardım kanalında başlık aç.",
+        "Müzik /cal. Takılırsan yardım kanalında başlık aç.",
         "Bende müzik ve karşılama var. Başka iş için directory'ye bak.",
       ]],
       [/kimsin|nesin|sen kim|adın ne|adin ne/i, [
@@ -178,7 +178,7 @@ const VOICES = {
       ]],
     ],
     fallback: [
-      "Duydum. Müzikse /muzik, başka bir şeyse kısaca yaz.",
+      "Duydum. Müzikse /cal, başka bir şeyse kısaca yaz.",
       "Buradayım. Ne bakalım?",
       "Dinliyorum. Bir cümle yeter.",
     ],
@@ -232,7 +232,7 @@ const VOICES = {
     rules: [
       [/yardım|yardim|başlık|baslik|kanal|nereye|nerede|ticket/i, [
         "Takıldığın yeri /ticket ile aç. Konu ve açıklamayı yaz, başlığı ben kurarım.",
-        "Yeniysen yazılım kanalından rolünü al, sonra /ticket yaz.",
+        "Takıldın mı /ticket yaz. Yetkililer bildirimi alır.",
         "Nereye bakacağını söyle. Kanalı ben tarif ederim.",
       ]],
       [/selam|merhaba|\bhey\b|naber|nasılsın|nasilsin/i, [
@@ -402,6 +402,7 @@ function answerMember(message, who = "atrium") {
   const key = `${who}:${message.channelId}:${message.author.id}`;
   const now = Date.now();
   if (now - (recentReplies.get(key) || 0) < REPLY_GAP) return;
+  if (recentReplies.size > 300) recentReplies.delete(recentReplies.keys().next().value);
   recentReplies.set(key, now);
   replyText(message.content, who, voice)
     .then((text) => message.reply(text))

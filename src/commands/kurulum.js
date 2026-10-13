@@ -6,7 +6,7 @@ const { UserError } = require("../errors");
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("kurulum")
-    .setDescription("Rol, kanal, karşılama ve denetim yapısını kurar.")
+    .setDescription("Rolleri ve Kurallar, Duyurular, Karşılama kanallarını kurar.")
     .addBooleanOption((option) => option
       .setName("onay")
       .setDescription("Bu işlemi uygulamak istediğini onayla")
@@ -17,7 +17,7 @@ module.exports = {
       .setRequired(false))
     .addBooleanOption((option) => option
       .setName("kanallari-sifirla")
-      .setDescription("Yeni yapı dışındaki kanalları sil. Varsayılan: hayır")
+      .setDescription("Kurulum ve /kanal-ayarla ile bağlı olmayan kanalları sil. Varsayılan: hayır")
       .setRequired(false)),
 
   async execute(interaction) {
@@ -53,9 +53,8 @@ module.exports = {
       ].join("\n"))
       .addFields(
         { name: "Roller", value: "Kurucu, Yönetici, Moderatör, Denetçi, DJ, Üye ve dil rolleri", inline: false },
-        { name: "Yazılım", value: "Dil rolü #yigin kanalından alınır. Soru #yardim, proje #projeler. `/github` ve `/dokuman` yazılım kanallarında çalışır.", inline: false },
-        { name: "Müzik", value: "`/muzik cal` komutunu ses kanalındayken müzik kanalında kullan.", inline: false },
-        { name: "Denetim", value: "Giriş, silinen mesaj, ban, kick, susturma ve rol değişiklikleri denetim kanalına düşer.", inline: false },
+        { name: "Kanallar", value: "Kurallar, Duyurular ve Karşılama kuruldu. Diğer kanalları kendin aç ve `/kanal-ayarla` ile bağla: Genel, Komutlar (Valorant paneli), Seviye, Ses, Takım A/B, Müzik, Yetkili sohbeti, Ticket bildirimleri.", inline: false },
+        { name: "Komutlar", value: "`/github`, `/dokuman`, `/calistir`, `/ticket` ve `/cal` her kanalda çalışır.", inline: false },
       );
 
     await interaction.editReply({ embeds: [embed] });

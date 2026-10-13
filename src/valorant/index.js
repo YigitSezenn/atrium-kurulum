@@ -9,13 +9,18 @@ const {
   TextInputBuilder,
   TextInputStyle,
 } = require("discord.js");
-const { henrikApiKey } = require("../config");
 const { UserError } = require("../errors");
 const { getGuild, updateGuild } = require("../store");
-const { accountOf, update } = require("../valorantStore");
-const { syncRankBadge } = require("../badges");
+const { accountOf, accountsOf, update } = require("../valorantStore");
+const { RANKS, removeRankBadges, syncRankBadge } = require("../badges");
+const { henrik } = require("./henrik");
+const { buildTeams, handleTeamButton, watchTeamVoice } = require("./teams");
+const { command: metaCommand } = require("./meta");
 
 const REGION = "eu";
+const WATCH_EVERY = 30 * 60 * 1000;
+const RECHECK_AFTER = 24 * 60 * 60 * 1000;
+const WATCH_BATCH = 10;
 
 function cleanName(value) {
   return String(value || "").trim().replace(/^#/, "").slice(0, 16);
@@ -47,21 +52,6 @@ function linkModal() {
     new ActionRowBuilder().addComponents(tag),
   );
   return modal;
-}
-
-async function henrik(path) {
-  if (!henrikApiKey) {
-    throw new UserError("İstatistik için .env dosyasına HENRIK_API_KEY yaz. Anahtarı henrikdev.xyz üzerinden al; sohbete yapıştırma.");
-  }
-  const response = await fetch(`https://api.henrikdev.xyz${path}`, {
-    headers: { Authorization: henrikApiKey, Accept: "application/json" },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = body.errors?.[0]?.message || body.message || `Henrik yanıtı ${response.status}`;
-    throw new UserError(String(message).slice(0, 180));
-  }
-  return body.data;
 }
 
 function playerOf(match, name, tag) {
@@ -123,12 +113,50 @@ function card(guild, account, mmr, matches) {
   return embed;
 }
 
+function rankIndex(name) {
+  return RANKS.findIndex((rank) => rank.name === name);
+}
+
+async function announceRankUp(member, account, from, to) {
+  const channels = getGuild(member.guild.id)?.channels || {};
+  const channelId = channels.genel || channels.komutlar;
+  const channel = channelId && (member.guild.channels.cache.get(channelId)
+    || await member.guild.channels.fetch(channelId).catch(() => null));
+  if (!channel?.isTextBased()) return;
+  const embed = new EmbedBuilder()
+    .setColor(/radiant/i.test(to) ? 0xffe7a3 : 0xff4655)
+    .setAuthor({ name: member.displayName, iconURL: member.displayAvatarURL() })
+    .setTitle(`${to} oldu`)
+    .setDescription(`${member} rank atladı: **${from}** → **${to}**`)
+    .setFooter({ text: `${account.name}#${account.tag}` })
+    .setTimestamp();
+  await channel.send({ embeds: [embed] }).catch(() => {});
+}
+
+async function syncTier(member, account, mmr) {
+  const tier = mmr?.current_data?.currenttierpatched || "";
+  const roleName = await syncRankBadge(member, tier);
+  const before = account.tier;
+  await update(member.guild.id, (entry) => {
+    if (!entry.users[member.id]) return;
+    entry.users[member.id].tier = roleName;
+    entry.users[member.id].checkedAt = Date.now();
+  });
+  if (before && rankIndex(roleName) > rankIndex(before) && roleName !== "Unrated") {
+    await announceRankUp(member, account, before, roleName);
+  }
+  return roleName;
+}
+
+async function fetchMmr(account, options) {
+  return henrik(`/valorant/v2/mmr/${REGION}/${encodeURIComponent(account.name)}/${encodeURIComponent(account.tag)}`, options);
+}
+
 async function refresh(member, account) {
   const name = encodeURIComponent(account.name);
   const tag = encodeURIComponent(account.tag);
-  const mmr = await henrik(`/valorant/v2/mmr/${REGION}/${name}/${tag}`);
-  const tier = mmr?.current_data?.currenttierpatched || "";
-  const roleName = await syncRankBadge(member, tier);
+  const mmr = await fetchMmr(account);
+  const roleName = await syncTier(member, account, mmr);
   let matches = [];
   try {
     matches = await henrik(`/valorant/v3/matches/${REGION}/${name}/${tag}?mode=competitive&size=5`);
@@ -146,9 +174,48 @@ async function saveAccount(guildId, userId, name, tag) {
     throw new UserError("İsim ve etiket Riot biçiminde olmalı. Örnek: Yiğit ve TR1.");
   }
   await update(guildId, (entry) => {
-    entry.users[userId] = clean;
+    const previous = entry.users[userId];
+    const same = previous && previous.name.toLowerCase() === clean.name.toLowerCase() && previous.tag.toLowerCase() === clean.tag.toLowerCase();
+    entry.users[userId] = same ? { ...previous, ...clean } : clean;
   });
-  return clean;
+  return accountOf(guildId, userId);
+}
+
+async function unlink(interaction) {
+  const account = accountOf(interaction.guildId, interaction.user.id);
+  if (!account) throw new UserError("Bağlı bir Valorant hesabın yok.");
+  await update(interaction.guildId, (entry) => {
+    delete entry.users[interaction.user.id];
+  });
+  await removeRankBadges(interaction.member);
+  await interaction.reply({ content: `${account.name}#${account.tag} bağlantısı kaldırıldı. Rank rolün alındı.`, flags: MessageFlags.Ephemeral });
+}
+
+async function watchRanks(client) {
+  for (const guild of client.guilds.cache.values()) {
+    const due = Object.entries(accountsOf(guild.id))
+      .filter(([, account]) => Date.now() - (account.checkedAt || 0) > RECHECK_AFTER)
+      .sort((a, b) => (a[1].checkedAt || 0) - (b[1].checkedAt || 0))
+      .slice(0, WATCH_BATCH);
+    for (const [userId, account] of due) {
+      const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        await update(guild.id, (entry) => {
+          if (entry.users[userId]) entry.users[userId].checkedAt = Date.now();
+        });
+        continue;
+      }
+      try {
+        await syncTier(member, account, await fetchMmr(account, { fresh: true }));
+      } catch (error) {
+        console.error(`Valorant rankı güncellenemedi (${account.name}#${account.tag}):`, error.message);
+        await update(guild.id, (entry) => {
+          if (entry.users[userId]) entry.users[userId].checkedAt = Date.now() - RECHECK_AFTER + 2 * 60 * 60 * 1000;
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
 }
 
 async function handleValorantButton(interaction) {
@@ -173,7 +240,7 @@ function panelPayload() {
       new EmbedBuilder()
         .setColor(0xff4655)
         .setTitle("Valorant")
-        .setDescription("Hesabını bağla. Profilindeki rank rol olarak verilir. Bölge EU."),
+        .setDescription("Hesabını bağla. Rankın rol olarak verilir ve her gün kendiliğinden güncellenir. Bölge EU.\n\n`/valorant profil` · `/valorant takim-kur` · `/valorant kaldir`"),
     ],
     components: [
       new ActionRowBuilder().addComponents(
@@ -192,27 +259,70 @@ async function postValorantPanel(guild) {
   if (!channel?.isTextBased()) return;
   const saved = getGuild(guild.id)?.valorantPanelId;
   const existing = saved && await channel.messages.fetch(saved).catch(() => null);
-  if (existing) {
+  if (existing?.author?.id === guild.client.user.id) {
     await existing.edit(panelPayload()).catch(() => {});
     return;
   }
+  if (existing) await existing.delete().catch(() => {});
   const message = await channel.send(panelPayload());
   await updateGuild(guild.id, (entry) => {
     entry.valorantPanelId = message.id;
   });
 }
 
+async function handleValorantInteraction(interaction) {
+  if (interaction.isButton() && interaction.customId === "valorant:link") {
+    await handleValorantButton(interaction);
+    return true;
+  }
+  if (interaction.isModalSubmit() && interaction.customId === "valorant:modal") {
+    await handleValorantModal(interaction);
+    return true;
+  }
+  return handleTeamButton(interaction);
+}
+
+function startValorant(client) {
+  const panels = () => {
+    for (const guild of client.guilds.cache.values()) {
+      postValorantPanel(guild).catch((error) => console.error("Valorant paneli yazılamadı:", error.message));
+    }
+  };
+  panels();
+  setInterval(panels, 10 * 60 * 1000).unref();
+  watchTeamVoice(client);
+  const loop = () => {
+    watchRanks(client)
+      .catch((error) => console.error("Valorant rankları güncellenemedi:", error.message))
+      .finally(() => setTimeout(loop, WATCH_EVERY).unref());
+  };
+  setTimeout(loop, 60_000).unref();
+}
+
 const command = {
   data: new SlashCommandBuilder()
     .setName("valorant")
-    .setDescription("Valorant hesabını bağlar ve istatistik gösterir.")
+    .setDescription("Valorant hesabını bağlar, istatistik gösterir ve takım kurar.")
     .addSubcommand((sub) => sub.setName("profil").setDescription("Bağlı hesabın rankını, RR ve son maçlarını gösterir."))
-    .addSubcommand((sub) => sub.setName("bagla").setDescription("İsim ve etiket formunu açar.")),
+    .addSubcommand((sub) => sub.setName("bagla").setDescription("İsim ve etiket formunu açar."))
+    .addSubcommand((sub) => sub.setName("kaldir").setDescription("Valorant hesabının bağlantısını ve rank rolünü kaldırır."))
+    .addSubcommand((sub) => sub
+      .setName("takim-kur")
+      .setDescription("Ses kanalındaki oyuncuları ranklarına göre dengeli iki takıma böler.")
+      .addBooleanOption((option) => option.setName("harita").setDescription("Rastgele harita da seçilsin mi? Varsayılan evet."))),
 
   async execute(interaction) {
     const sub = interaction.options.getSubcommand();
     if (sub === "bagla") {
       await interaction.showModal(linkModal());
+      return;
+    }
+    if (sub === "kaldir") {
+      await unlink(interaction);
+      return;
+    }
+    if (sub === "takim-kur") {
+      await buildTeams(interaction);
       return;
     }
     const account = accountOf(interaction.guildId, interaction.user.id);
@@ -223,4 +333,4 @@ const command = {
   },
 };
 
-module.exports = { commands: [command], handleValorantButton, handleValorantModal, postValorantPanel };
+module.exports = { commands: [command, metaCommand], handleValorantInteraction, postValorantPanel, startValorant };

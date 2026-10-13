@@ -117,4 +117,13 @@ async function syncRankBadge(member, tier) {
   return want;
 }
 
-module.exports = { syncRankBadge, wantedBadge, RANKS };
+async function removeRankBadges(member) {
+  const rankIds = new Set(Object.values(getGuild(member.guild.id)?.rankRoles || {}));
+  const remove = member.roles.cache.filter((role) => rankIds.has(role.id));
+  if (!remove.size) return;
+  await member.roles.remove(remove, "Valorant bağlantısı kaldırıldı").catch((error) => {
+    console.error("Rank rolü alınamadı:", error.message);
+  });
+}
+
+module.exports = { syncRankBadge, removeRankBadges, wantedBadge, RANKS };

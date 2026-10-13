@@ -1,4 +1,6 @@
 const { lavalinkPassword, lavalinkUrl } = require("../config");
+const { startBridge } = require("./bridge");
+const { playBody, readLoad, voiceState } = require("./protocol");
 
 const hooks = new Map();
 const voice = new Map();
@@ -15,8 +17,7 @@ function restBase() {
 }
 
 function socketUrl() {
-  const base = restBase().replace(/^http/i, "ws");
-  return `${base}/v4/websocket`;
+  return `${restBase().replace(/^http/i, "ws")}/v4/websocket`;
 }
 
 function connected() {
@@ -38,20 +39,43 @@ function sendVoice(guildId, channelId) {
 }
 
 function rememberVoice(guildId, patch) {
-  const current = voice.get(guildId) || {};
-  const next = { ...current, ...patch };
+  const next = { ...(voice.get(guildId) || {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value) next[key] = value;
+  }
   voice.set(guildId, next);
   if (next.channelId) hooks.get(guildId)?.onChannel?.(next.channelId);
-  if (!next.sessionId || !next.token || !next.endpoint) return;
+  if (!next.sessionId || !next.token || !next.endpoint || !next.channelId) return;
   const waiter = waiters.get(guildId);
-  if (!waiter) return;
-  clearTimeout(waiter.timer);
-  waiters.delete(guildId);
-  waiter.resolve(next);
+  if (waiter) {
+    clearTimeout(waiter.timer);
+    waiters.delete(guildId);
+    waiter.resolve(next);
+    return;
+  }
+  if (!next.sent || !sessionId) return;
+  const state = voiceState(next);
+  if (next.sentToken === state.token && next.sentEndpoint === state.endpoint && next.sentSession === state.sessionId && next.sentChannel === state.channelId) return;
+  api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, { voice: state })
+    .then(() => {
+      const latest = voice.get(guildId);
+      if (!latest) return;
+      voice.set(guildId, {
+        ...latest,
+        ...state,
+        sent: true,
+        sentToken: state.token,
+        sentEndpoint: state.endpoint,
+        sentSession: state.sessionId,
+        sentChannel: state.channelId,
+        lavalinkSession: sessionId,
+      });
+    })
+    .catch((error) => console.error("Ses bağlantısı güncellenemedi:", error.message));
 }
 
 function onPacket(packet) {
-  if (!packet || packet.op !== 0 && !packet.t) return;
+  if (!packet?.t) return;
   if (packet.t === "VOICE_STATE_UPDATE") {
     if (!client?.user || packet.d?.user_id !== client.user.id) return;
     if (!packet.d.channel_id) {
@@ -92,9 +116,8 @@ function onMessage(raw) {
   if (message.op !== "event") return;
   const hook = hooks.get(message.guildId);
   if (!hook) return;
-  if (message.type === "TrackEndEvent") hook.onEnd?.(message.reason);
-  if (message.type === "TrackExceptionEvent") hook.onException?.(message.exception?.message || "Parça çalınamadı.");
-  if (message.type === "TrackStuckEvent") hook.onException?.("Parça takıldı.");
+  if (message.type === "TrackEndEvent" && message.reason === "finished") hook.onEnd?.();
+  if (message.type === "TrackExceptionEvent" || message.type === "TrackStuckEvent") hook.onException?.();
 }
 
 function openSocket() {
@@ -102,7 +125,7 @@ function openSocket() {
   if (opening) return opening;
   opening = new Promise((resolve, reject) => {
     if (!client?.user) {
-      reject(new Error("Bot henüz hazır değil."));
+      reject(new Error("Müzik sunucusu hazır değil."));
       return;
     }
     let settled = false;
@@ -156,6 +179,7 @@ function scheduleRetry() {
 }
 
 function bindLavalink(discord) {
+  startBridge();
   client = discord;
   discord.on("raw", onPacket);
   discord.once("clientReady", () => {
@@ -177,68 +201,43 @@ async function api(method, path, body) {
     method,
     headers: {
       Authorization: lavalinkPassword,
-      "Content-Type": "application/json",
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
+  const text = await response.text().catch(() => "");
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(text.slice(0, 300) || `Müzik sunucusu ${response.status}`);
+    console.error("Müzik sunucusu:", response.status, text.slice(0, 300));
+    throw new Error(response.status === 400 ? "Ses bağlantısı kurulamadı." : "Müzik sunucusu isteği reddetti.");
   }
-  if (response.status === 204) return null;
-  return response.json().catch(() => null);
+  if (!text) return null;
+  return JSON.parse(text);
 }
 
 function registerGuild(guildId, hook) {
   hooks.set(guildId, hook);
 }
 
-function loadFailure(message) {
-  const error = new Error(String(message || "Müzik sunucusu parçayı açamadı.").replace(/\s+/g, " ").trim().slice(0, 500));
-  error.lavalinkLoad = true;
-  return error;
-}
-
 async function loadTrack(identifier) {
   await ensureSocket();
   const response = await fetch(`${restBase()}/v4/loadtracks?identifier=${encodeURIComponent(identifier)}`, {
     headers: { Authorization: lavalinkPassword },
-    signal: AbortSignal.timeout(8_000),
+    signal: AbortSignal.timeout(20_000),
   }).catch((error) => {
-    if (error.name === "TimeoutError" || error.name === "AbortError") {
-      throw new Error("Müzik sunucusu yanıt vermedi.");
-    }
+    if (error.name === "TimeoutError" || error.name === "AbortError") throw new Error("Müzik sunucusu yanıt vermedi.");
     throw error;
   });
+  const text = await response.text().catch(() => "");
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw loadFailure(text || `Müzik sunucusu ${response.status}`);
+    console.error("Müzik sunucusu:", response.status, text.slice(0, 300));
+    throw new Error("Parça bulunamadı.");
   }
-  const body = await response.json();
-  if (body.loadType === "error") {
-    throw loadFailure(body.data?.message || body.data?.cause);
-  }
-  const track = body.loadType === "track"
-    ? body.data
-    : body.loadType === "search"
-      ? body.data?.[0]
-      : body.loadType === "playlist"
-        ? body.data?.tracks?.[0]
-        : null;
-  if (!track?.encoded || !track.info?.title) throw new Error("Parça bulunamadı.");
-  return {
-    title: track.info.title,
-    uri: track.info.uri || "",
-    duration: Math.floor((Number(track.info.length) || 0) / 1000),
-    isStream: Boolean(track.info.isStream),
-    encoded: track.encoded,
-    source: track.info.sourceName || "",
-  };
+  return readLoad(JSON.parse(text));
 }
 
 function awaitVoice(guildId) {
   const current = voice.get(guildId);
-  if (current?.sessionId && current.token && current.endpoint) return Promise.resolve(current);
+  if (current?.sessionId && current.token && current.endpoint && current.channelId) return Promise.resolve(current);
   const previous = waiters.get(guildId);
   if (previous) {
     clearTimeout(previous.timer);
@@ -254,38 +253,68 @@ function awaitVoice(guildId) {
   });
 }
 
-async function stopTrack(guildId) {
-  if (!sessionId) return;
-  await api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, {
-    track: { encoded: null },
-  });
-}
-
 async function join(guildId, channelId) {
   await ensureSocket();
   const current = voice.get(guildId);
-  if (current?.channelId === channelId && current.sessionId && current.token && current.endpoint) return;
+  const sameChannel = current?.channelId === channelId && current.sessionId && current.token && current.endpoint;
+  if (sameChannel && current.sent && current.lavalinkSession === sessionId) return;
+  if (sameChannel) {
+    const state = voiceState(current);
+    await api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, { voice: state });
+    voice.set(guildId, {
+      ...voice.get(guildId),
+      ...state,
+      sent: true,
+      sentToken: state.token,
+      sentEndpoint: state.endpoint,
+      sentSession: state.sessionId,
+      sentChannel: state.channelId,
+      lavalinkSession: sessionId,
+    });
+    return;
+  }
+
+  const carried = {};
+  if (current?.token) carried.token = current.token;
+  if (current?.endpoint) carried.endpoint = current.endpoint;
+  if (current?.sessionId) carried.sessionId = current.sessionId;
   voice.delete(guildId);
+  if (Object.keys(carried).length) voice.set(guildId, carried);
+
   const pending = awaitVoice(guildId);
   sendVoice(guildId, channelId);
-  const update = await pending;
-  await api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, {
-    voice: {
-      token: update.token,
-      endpoint: update.endpoint,
-      sessionId: update.sessionId,
-    },
+  await pending;
+  const update = voice.get(guildId) || {};
+  const state = voiceState({ ...update, channelId: update.channelId || channelId });
+  await api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, { voice: state });
+  const latest = voice.get(guildId) || {};
+  const finalState = voiceState({
+    token: latest.token || state.token,
+    endpoint: latest.endpoint || state.endpoint,
+    sessionId: latest.sessionId || state.sessionId,
+    channelId: latest.channelId || state.channelId,
+  });
+  if (finalState.token !== state.token || finalState.endpoint !== state.endpoint || finalState.sessionId !== state.sessionId || finalState.channelId !== state.channelId) {
+    await api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, { voice: finalState });
+  }
+  voice.set(guildId, {
+    ...finalState,
+    sent: true,
+    sentToken: finalState.token,
+    sentEndpoint: finalState.endpoint,
+    sentSession: finalState.sessionId,
+    sentChannel: finalState.channelId,
+    lavalinkSession: sessionId,
   });
 }
 
-async function play(guildId, encoded, position, volume) {
+async function play(guildId, encoded, positionMs, volume) {
   await ensureSocket();
-  await api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}?noReplace=false`, {
-    track: { encoded },
-    position: Math.max(0, Math.floor(position) || 0),
-    volume: Math.max(0, Math.min(1000, Math.round(volume))),
-    paused: false,
-  });
+  await api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}?noReplace=false`, playBody({
+    encoded,
+    positionMs,
+    volume,
+  }));
 }
 
 function setPaused(guildId, paused) {
@@ -297,11 +326,15 @@ function setPaused(guildId, paused) {
 
 function setVolume(guildId, volume) {
   if (!sessionId) return;
-  api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, {
-    volume: Math.max(0, Math.min(1000, Math.round(volume))),
-  }).catch((error) => {
+  const level = Math.max(0, Math.min(1000, Math.round(Number(volume) || 0)));
+  api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, { volume: level }).catch((error) => {
     console.error("Ses iletilemedi:", error.message);
   });
+}
+
+async function stopTrack(guildId) {
+  if (!sessionId) return;
+  await api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, { track: { encoded: null } });
 }
 
 async function destroy(guildId) {
