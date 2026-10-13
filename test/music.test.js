@@ -268,6 +268,10 @@ test("only a YouTube media host can be handed to the player", () => {
   assert.equal(videoFromRequest("https://example.com/song.mp3"), "");
   assert.equal(videoFromRequest("/yt/short"), "");
   assert.equal(videoFromRequest("/yt/3PLIa3zFqt4/extra"), "");
+  const { spanOf } = require("../src/music/bridge");
+  assert.deepEqual(spanOf("", 1000), { start: 0, end: 999 });
+  assert.deepEqual(spanOf("bytes=100-199", 1000), { start: 100, end: 199 });
+  assert.deepEqual(spanOf("bytes=900-", 1000), { start: 900, end: 999 });
 });
 
 test("an unknown link is rejected", async () => {
@@ -332,7 +336,7 @@ test("shuffle, seek and filters stay inside the queue", () => {
 test("music commands are the Kabal names", () => {
   const names = musicCommands.map((command) => command.data.name).sort();
   assert.deepEqual(names, [
-    "atla", "devam", "duraklat", "filtreler", "kapat", "karistir", "liste", "lyrics", "oynat", "sardir", "sarki", "ses", "tekrarla",
+    "atla", "cal", "devam", "duraklat", "filtreler", "kapat", "karistir", "liste", "lyrics", "oynat", "sardir", "sarki", "ses", "tekrarla",
   ]);
   for (const command of musicCommands) {
     const body = command.data.toJSON();

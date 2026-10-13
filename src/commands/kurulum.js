@@ -54,7 +54,7 @@ module.exports = {
       .addFields(
         { name: "Roller", value: "Kurucu, Yönetici, Moderatör, Denetçi, DJ, Üye ve dil rolleri", inline: false },
         { name: "Kanallar", value: "Kurallar, Duyurular ve Karşılama kuruldu. Diğer kanalları kendin aç ve `/kanal-ayarla` ile bağla: Genel, Komutlar (Valorant paneli), Seviye, Ses, Takım A/B, Müzik, Yetkili sohbeti, Ticket bildirimleri.", inline: false },
-        { name: "Komutlar", value: "`/github`, `/dokuman`, `/calistir`, `/ticket` ve `/oynat` her kanalda çalışır.", inline: false },
+        { name: "Komutlar", value: "`/github`, `/dokuman`, `/calistir`, `/ticket` ve `/cal` her kanalda çalışır.", inline: false },
       );
 
     await interaction.editReply({ embeds: [embed] });

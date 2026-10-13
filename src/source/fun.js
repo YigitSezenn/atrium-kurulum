@@ -111,7 +111,7 @@ const commands = [
   command("yardim", "Botta bulunan komutlar hakkında yardım almanı sağlar.", async (interaction) => {
     await interaction.reply({
       embeds: [new EmbedBuilder().setColor(0x3498db).setTitle("Komutlar").setDescription([
-        "**Müzik:** `/oynat` `/atla` `/duraklat` `/devam` `/kapat` `/ses` `/sarki` `/liste` `/karistir` `/sardir` `/tekrarla` `/lyrics` `/filtreler`",
+        "**Müzik:** `/cal` `/oynat` `/atla` `/duraklat` `/devam` `/kapat` `/ses` `/sarki` `/liste` `/karistir` `/sardir` `/tekrarla` `/lyrics` `/filtreler`",
         "**Soru:** `/sor` yanıtı özelden yollar.",
         "**Eğlence:** `/afk` `/hatirlat` `/depremler` `/iftar` `/ping` `/kedi` `/kopek` `/espri` `/yazitura` `/tkm` `/duello` `/rusruleti`",
       ].join("\n\n"))],

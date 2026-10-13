@@ -44,8 +44,8 @@ const spotify = {
     .addSubcommand((sub) => sub.setName("cikis").setDescription("Spotify bağlantısını kaldırır."))
     .addSubcommand((sub) => sub
       .setName("ara")
-      .setDescription("Arama sonucunu sıraya koyup sırayla çalar.")
-      .addStringOption((option) => option.setName("sorgu").setDescription("Şarkı veya sanatçı").setRequired(true).setMaxLength(100)))
+      .setDescription("Şarkı adıyla Spotify'da arar ve çalar.")
+      .addStringOption((option) => option.setName("sarki").setDescription("örnek: Dreams Joakim Karud").setRequired(true).setMaxLength(100)))
     .addSubcommand((sub) => sub.setName("liste").setDescription("Bir çalma listesini sırayla çalar.")),
 
   async execute(interaction) {
@@ -91,7 +91,7 @@ const spotify = {
     await guard(player, async () => {
       await interaction.deferReply();
       await interaction.editReply("Aranıyor. Bitene kadar yeni çalma komutu alınmaz.");
-      const tracks = await searchTracks(interaction.user.id, interaction.options.getString("sorgu"));
+      const tracks = await searchTracks(interaction.user.id, interaction.options.getString("sarki"));
       if (!tracks.length) throw new UserError("Spotify'da bu aramaya parça çıkmadı.");
       await queueQueries(interaction, tracks.map((track) => track.query));
     });

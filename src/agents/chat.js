@@ -160,17 +160,17 @@ const VOICES = {
     names: /\b(atrium|atreium|atreum|aterum)\b/i,
     rules: [
       [/müzik|muzik|şarkı|sarki|\bçal\b|\bcal\b|playlist|liste/i, [
-        "Şarkıyı /oynat ile yaz. Link ya da şarkı adı olur.",
+        "Şarkıyı /cal ile yaz. örnek: Dreams Joakim Karud",
         "Sırayı görmek için /liste yaz. Sırayı ben tutarım.",
         "Birden fazla şarkıysa araya | koy. Sırayla açarım.",
       ]],
       [/selam|merhaba|\bhey\b|naber|nasılsın|nasilsin|iyi misin/i, [
         "Buradayım. Avlu açık.",
-        "İyiyim. Bir şey çalmamı istersen /oynat yaz.",
+        "İyiyim. Bir şey çalmamı istersen /cal yaz.",
         "Selam. Ses tarafı sakın, istek gelince açarım.",
       ]],
       [/yardım|yardim|komut|ne yapı|ne yapi|ne iş|ne is/i, [
-        "Müzik /oynat. Takılırsan yardım kanalında başlık aç.",
+        "Müzik /cal. Takılırsan yardım kanalında başlık aç.",
         "Bende müzik ve karşılama var. Başka iş için directory'ye bak.",
       ]],
       [/kimsin|nesin|sen kim|adın ne|adin ne/i, [
@@ -178,7 +178,7 @@ const VOICES = {
       ]],
     ],
     fallback: [
-      "Duydum. Müzikse /oynat, başka bir şeyse kısaca yaz.",
+      "Duydum. Müzikse /cal, başka bir şeyse kısaca yaz.",
       "Buradayım. Ne bakalım?",
       "Dinliyorum. Bir cümle yeter.",
     ],

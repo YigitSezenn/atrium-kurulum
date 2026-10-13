@@ -13,14 +13,14 @@ function splitSongs(text) {
 }
 
 function listEmbed(lines, title) {
-  const description = lines.length ? lines.join("\n").slice(0, 4000) : "Sıra boş. Başlatmak için `/oynat` yaz.";
+  const description = lines.length ? lines.join("\n").slice(0, 4000) : "Sıra boş. Başlatmak için `/cal` yaz.";
   return new EmbedBuilder().setColor(0x9b59b6).setTitle(title).setDescription(description);
 }
 
 function songOption(option) {
   return option
     .setName("sarki")
-    .setDescription("YouTube, Spotify veya SoundCloud linki, ya da şarkı adı. Çoklu için |")
+    .setDescription("Şarkı adı veya link. örnek: Dreams Joakim Karud")
     .setRequired(true)
     .setMaxLength(1000);
 }
@@ -158,6 +158,17 @@ function queueLines(player) {
   return waiting;
 }
 
+const cal = {
+  data: new SlashCommandBuilder()
+    .setName("cal")
+    .setDescription("Şarkı adı veya linkle çalar. örnek: Dreams Joakim Karud")
+    .addStringOption(songOption)
+    .addChannelOption(voiceOption),
+  async execute(interaction) {
+    await playNow(interaction, getPlayer(interaction.guildId));
+  },
+};
+
 const oynat = {
   data: new SlashCommandBuilder()
     .setName("oynat")
@@ -237,7 +248,7 @@ const sarki = {
   data: new SlashCommandBuilder().setName("sarki").setDescription("Şu anda oynatılan şarkıyı gösterir."),
   async execute(interaction) {
     const player = getPlayer(interaction.guildId);
-    if (!player.current) throw new UserError("Şu an çalan bir şarkı yok. Başlatmak için `/oynat` yaz.");
+    if (!player.current) throw new UserError("Şu an çalan bir şarkı yok. Başlatmak için `/cal` yaz.");
     await interaction.reply(playingCard(player.current, player));
   },
 };
@@ -250,7 +261,7 @@ const liste = {
     if (!player.current) {
       await interaction.reply(waiting.length
         ? { embeds: [listEmbed(waiting, "Sıra")] }
-        : "Şu an çalan bir şarkı yok. Başlatmak için `/oynat` yaz.");
+        : "Şu an çalan bir şarkı yok. Başlatmak için `/cal` yaz.");
       return;
     }
     await interaction.reply(playingCard(player.current, player, { note: waiting.join("\n") }));
@@ -266,7 +277,7 @@ const karistir = {
       throw new UserError("Sırayı karıştırmak için DJ olman ya da kanalda tek başına olman gerekir.");
     }
     const count = player.shuffle();
-    if (!count) throw new UserError("Karıştırılacak şarkı yok. Önce `/oynat` ile birkaç şarkı ekle.");
+    if (!count) throw new UserError("Karıştırılacak şarkı yok. Önce `/cal` ile birkaç şarkı ekle.");
     await interaction.reply(`Sıradaki ${count} şarkının sırası karıştı.`);
   },
 };
@@ -330,6 +341,6 @@ const filtreler = {
   },
 };
 
-const commands = [oynat, kapat, duraklat, devam, atla, tekrarla, ses, sarki, liste, karistir, sardir, lyrics, filtreler];
+const commands = [cal, oynat, kapat, duraklat, devam, atla, tekrarla, ses, sarki, liste, karistir, sardir, lyrics, filtreler];
 
 module.exports = { commands, handleMusicButton };

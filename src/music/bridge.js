@@ -1,5 +1,4 @@
 const http = require("node:http");
-const { Readable } = require("node:stream");
 const { directAudio, UA } = require("./direct");
 
 const PORT = Number(process.env.YT_BRIDGE_PORT || 4100);
@@ -28,6 +27,56 @@ async function upstreamFor(id) {
   return audio.url;
 }
 
+const CHUNK = 512 * 1024;
+
+function spanOf(header, total) {
+  const match = /bytes=(\d*)-(\d*)/i.exec(String(header || ""));
+  if (!match || total < 1) return { start: 0, end: Math.max(0, total - 1) };
+  const suffix = !match[1] && match[2];
+  const start = suffix ? Math.max(0, total - Number(match[2])) : Number(match[1] || 0);
+  const end = suffix || !match[2] ? total - 1 : Number(match[2]);
+  const from = Math.max(0, Math.min(start, total - 1));
+  const to = Math.max(from, Math.min(end, total - 1));
+  return { start: from, end: to };
+}
+
+async function totalSize(upstream) {
+  const response = await fetch(upstream, {
+    headers: { "User-Agent": UA, Range: "bytes=0-0" },
+    signal: AbortSignal.timeout(12_000),
+  });
+  const total = Number((/\/(\d+)\s*$/.exec(response.headers.get("content-range") || "") || [])[1] || 0);
+  await response.body?.cancel().catch(() => {});
+  return total;
+}
+
+async function readChunk(id, start, end) {
+  const expected = end - start + 1;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const upstream = await upstreamFor(id);
+      const response = await fetch(upstream, {
+        headers: { "User-Agent": UA, Range: `bytes=${start}-${end}` },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (response.status === 403 || response.status === 410) {
+        await response.body?.cancel().catch(() => {});
+        cache.delete(id);
+        continue;
+      }
+      if (response.status !== 206 && response.status !== 200) {
+        await response.body?.cancel().catch(() => {});
+        continue;
+      }
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length === expected) return bytes;
+    } catch {
+      cache.delete(id);
+    }
+  }
+  return null;
+}
+
 function startBridge() {
   if (server) return server;
   server = http.createServer((req, res) => {
@@ -45,19 +94,6 @@ function startBridge() {
   return server;
 }
 
-async function openUpstream(id, range) {
-  const headers = { "User-Agent": UA, Range: range || "bytes=0-" };
-  let upstream = await upstreamFor(id);
-  let response = await fetch(upstream, { headers });
-  if (response.status !== 200 && response.status !== 206) {
-    await response.body?.cancel().catch(() => {});
-    cache.delete(id);
-    upstream = await upstreamFor(id);
-    response = await fetch(upstream, { headers });
-  }
-  return response;
-}
-
 async function handle(req, res) {
   const id = videoFromRequest(req.url);
   if (!id || (req.method !== "GET" && req.method !== "HEAD")) {
@@ -66,32 +102,42 @@ async function handle(req, res) {
     return;
   }
   res.setTimeout(0);
-  const range = typeof req.headers.range === "string" ? req.headers.range : "";
-  const upstream = await openUpstream(id, range);
-  if (upstream.status !== 200 && upstream.status !== 206) {
-    await upstream.body?.cancel().catch(() => {});
+  const upstream = await upstreamFor(id);
+  const total = await totalSize(upstream);
+  if (!total) {
     res.writeHead(502);
     res.end();
     return;
   }
+  const range = typeof req.headers.range === "string" ? req.headers.range : "";
+  const { start, end } = spanOf(range, total);
   const headers = {
-    "Content-Type": upstream.headers.get("content-type") || "audio/mp4",
+    "Content-Type": "audio/mp4",
     "Accept-Ranges": "bytes",
+    "Content-Length": String(end - start + 1),
   };
-  const length = upstream.headers.get("content-length");
-  if (length) headers["Content-Length"] = length;
-  const partial = Boolean(range) && upstream.status === 206;
-  if (partial) {
-    const contentRange = upstream.headers.get("content-range");
-    if (contentRange) headers["Content-Range"] = contentRange;
-  }
-  res.writeHead(partial ? 206 : 200, headers);
-  if (req.method === "HEAD" || !upstream.body) {
-    await upstream.body?.cancel().catch(() => {});
+  if (range) headers["Content-Range"] = `bytes ${start}-${end}/${total}`;
+  res.writeHead(range ? 206 : 200, headers);
+  if (req.method === "HEAD") {
     res.end();
     return;
   }
-  Readable.fromWeb(upstream.body).pipe(res);
+  let closed = false;
+  const stop = () => {
+    closed = true;
+  };
+  res.on("close", stop);
+  res.on("error", stop);
+  for (let offset = start; offset <= end && !closed; offset += CHUNK) {
+    const bytes = await readChunk(id, offset, Math.min(end, offset + CHUNK - 1));
+    if (!bytes || closed) break;
+    try {
+      if (!res.write(bytes)) await new Promise((resolve) => res.once("drain", resolve));
+    } catch {
+      break;
+    }
+  }
+  if (!closed) res.end();
 }
 
 async function bridgedYoutube(id) {
@@ -107,4 +153,4 @@ async function bridgedYoutube(id) {
   };
 }
 
-module.exports = { bridgeUrl, videoFromRequest, remember, startBridge, bridgedYoutube };
+module.exports = { bridgeUrl, videoFromRequest, remember, startBridge, bridgedYoutube, spanOf };
