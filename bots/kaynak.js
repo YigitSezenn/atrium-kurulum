@@ -8,8 +8,10 @@ const githubFollow = require("../src/commands/githubTakip");
 const { startGithubFeed } = require("../src/githubFeed");
 const { startBot } = require("./runtime");
 const { announceRelease } = require("../src/release");
+const { command: sor } = require("../src/source/ask");
+const { commands: funCommands, watchAfk, startReminders } = require("../src/source/fun");
 
-const commands = [...softwareCommands, githubFollow];
+const commands = [...softwareCommands, githubFollow, sor, ...funCommands];
 const CARD_GAP = 10 * 60 * 1000;
 const recentCards = new Map();
 
@@ -63,6 +65,7 @@ startBot({
   },
   onReady: async (client) => {
     startGithubFeed(client);
+    startReminders(client);
     connectBus("kaynak", {
       onConnect() {
         emit("agent.ready", { name: "kaynak" });
@@ -85,6 +88,7 @@ startBot({
     client.on("messageCreate", async (message) => {
       try {
         if (!message.guild || message.author.bot) return;
+        watchAfk(message);
         answerMember(message, "kaynak");
         if (!/github\.com\/[\w.-]+\/[\w.-]+/i.test(message.content || "")) return;
         const parsed = visibleRepo(message);

@@ -332,6 +332,21 @@ function setVolume(guildId, volume) {
   });
 }
 
+function seek(guildId, positionMs) {
+  if (!sessionId) return;
+  const position = Math.max(0, Math.floor(Number(positionMs) || 0));
+  api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, { position }).catch((error) => {
+    console.error("Sarma iletilemedi:", error.message);
+  });
+}
+
+function setFilters(guildId, filters) {
+  if (!sessionId) return;
+  api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, { filters: filters || {} }).catch((error) => {
+    console.error("Filtre iletilemedi:", error.message);
+  });
+}
+
 async function stopTrack(guildId) {
   if (!sessionId) return;
   await api("PATCH", `/v4/sessions/${sessionId}/players/${guildId}`, { track: { encoded: null } });
@@ -363,6 +378,8 @@ module.exports = {
   play,
   setPaused,
   setVolume,
+  seek,
+  setFilters,
   stopTrack,
   destroy,
 };

@@ -54,7 +54,7 @@ function welcomeEmbed(guild, member) {
         `${rules} kanalındaki butona bas, Üye rolünü al.`,
         stack ? `Dil rolü için ${stack}.` : null,
         help ? `Soru için ${help} ya da /ticket.` : "Soru için /ticket. `/github`, `/dokuman`, `/calistir` her kanalda çalışır.",
-        "Müzik için bir ses kanalına girip `/cal` yaz. YouTube, Spotify veya SoundCloud linki ya da şarkı adı olur.",
+        "Müzik için bir ses kanalına girip `/oynat` yaz. YouTube, Spotify veya SoundCloud linki ya da şarkı adı olur.",
       ].filter(Boolean).join("\n"));
   }
 

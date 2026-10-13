@@ -160,17 +160,17 @@ const VOICES = {
     names: /\b(atrium|atreium|atreum|aterum)\b/i,
     rules: [
       [/müzik|muzik|şarkı|sarki|\bçal\b|\bcal\b|playlist|liste/i, [
-        "Şarkıyı /cal ile yaz. Link ya da şarkı adı olur.",
-        "Listeye eklemek için /muzik ekle. Sırayı ben tutarım.",
+        "Şarkıyı /oynat ile yaz. Link ya da şarkı adı olur.",
+        "Sırayı görmek için /liste yaz. Sırayı ben tutarım.",
         "Birden fazla şarkıysa araya | koy. Sırayla açarım.",
       ]],
       [/selam|merhaba|\bhey\b|naber|nasılsın|nasilsin|iyi misin/i, [
         "Buradayım. Avlu açık.",
-        "İyiyim. Bir şey çalmamı istersen /cal yaz.",
+        "İyiyim. Bir şey çalmamı istersen /oynat yaz.",
         "Selam. Ses tarafı sakın, istek gelince açarım.",
       ]],
       [/yardım|yardim|komut|ne yapı|ne yapi|ne iş|ne is/i, [
-        "Müzik /cal. Takılırsan yardım kanalında başlık aç.",
+        "Müzik /oynat. Takılırsan yardım kanalında başlık aç.",
         "Bende müzik ve karşılama var. Başka iş için directory'ye bak.",
       ]],
       [/kimsin|nesin|sen kim|adın ne|adin ne/i, [
@@ -178,7 +178,7 @@ const VOICES = {
       ]],
     ],
     fallback: [
-      "Duydum. Müzikse /cal, başka bir şeyse kısaca yaz.",
+      "Duydum. Müzikse /oynat, başka bir şeyse kısaca yaz.",
       "Buradayım. Ne bakalım?",
       "Dinliyorum. Bir cümle yeter.",
     ],
@@ -301,7 +301,7 @@ function chatKeyNote() {
   return " Sohbet anahtarı açık, replikler modelden gelir.";
 }
 
-async function complete(system, user, maxTokens) {
+async function complete(system, user, maxTokens, options = {}) {
   if (!chatApiKey) return null;
   if (chatKeyExpired()) {
     warnKey(`Sohbet anahtarının süresi ${expiryLabel()} tarihinde doldu. Yeni anahtarı .env içindeki CHAT_API_KEY alanına yazıp botu yeniden aç. Hazır replikler kullanılıyor.`);
@@ -315,11 +315,11 @@ async function complete(system, user, maxTokens) {
     },
     body: JSON.stringify({
       model: chatModel,
-      temperature: 0.9,
+      temperature: options.temperature ?? 0.9,
       max_tokens: maxTokens,
       messages: [
         { role: "system", content: system },
-        { role: "user", content: user.slice(0, 500) },
+        { role: "user", content: String(user || "").slice(0, options.limit || 500) },
       ],
     }),
     signal: AbortSignal.timeout(12000),
@@ -340,6 +340,15 @@ async function complete(system, user, maxTokens) {
   if (text) console.log(`Sohbet modeli cevap verdi (${chatModel}).`);
   else console.error("Sohbet modeli boş cevap verdi. Hazır replikler kullanılıyor.");
   return text;
+}
+
+async function askQuestion(text) {
+  return complete(
+    "Soruyu düz Türkçe cevapla. Kısa tut. Bilmediğini uydurma.",
+    String(text || ""),
+    800,
+    { limit: 1500, temperature: 0.4 },
+  );
 }
 
 function parseScene(raw) {
@@ -418,5 +427,6 @@ module.exports = {
   answerMember,
   botsMayTalk,
   chatKeyNote,
+  askQuestion,
   IDLE_EVERY,
 };

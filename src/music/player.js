@@ -172,6 +172,36 @@ class GuildPlayer {
     this.playFrom(this.current, 0);
   }
 
+  shuffle() {
+    const list = this.queue;
+    for (let index = list.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [list[index], list[swap]] = [list[swap], list[index]];
+    }
+    return list.length;
+  }
+
+  seek(seconds) {
+    if (!this.current) return null;
+    if (this.status !== "playing" && this.status !== "paused") return null;
+    const wanted = Math.max(0, Math.floor(Number(seconds) || 0));
+    const limit = Math.max(0, Math.floor(Number(this.current.duration) || 0));
+    const at = limit > 0 ? Math.min(wanted, limit) : wanted;
+    this.anchorMs = at * 1000;
+    if (this.status === "playing") this.anchorAt = Date.now();
+    this.api.seek?.(this.guildId, at * 1000);
+    return at;
+  }
+
+  applyFilter(name) {
+    const { filterPreset } = require("./filters");
+    const body = filterPreset(name);
+    if (!body) return false;
+    this.filter = name;
+    this.api.setFilters?.(this.guildId, body);
+    return true;
+  }
+
   toggleRepeat() {
     this.repeat = !this.repeat;
     return this.repeat;

@@ -2,6 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { playBody, readLoad, voiceState } = require("../src/music/protocol");
 const { createGuildPlayer } = require("../src/music/player");
+const { filterPreset } = require("../src/music/filters");
+const { commands: musicCommands } = require("../src/commands/muzik");
 const { resolveTrack, formatDuration, formatSpoken } = require("../src/music/resolve");
 const { playingCard } = require("../src/music/card");
 const { videoFromRequest } = require("../src/music/bridge");
@@ -44,6 +46,12 @@ function fakeApi() {
     },
     async destroy(guildId) {
       calls.push(["destroy", guildId]);
+    },
+    seek(guildId, positionMs) {
+      calls.push(["seek", guildId, positionMs]);
+    },
+    setFilters(guildId, filters) {
+      calls.push(["filters", guildId, filters]);
     },
   };
 }
@@ -303,4 +311,31 @@ test("pause, volume and skip stay on the same player", async () => {
     ["stop", "guild"],
     ["play", "guild", "two", 0, 50],
   ]);
+});
+
+test("shuffle, seek and filters stay inside the queue", () => {
+  const api = fakeApi();
+  const player = createGuildPlayer("guild", api);
+  player.queue.push({ title: "A" }, { title: "B" }, { title: "C" });
+  assert.equal(player.shuffle(), 3);
+  assert.equal(player.queue.length, 3);
+  player.current = { title: "A", duration: 90 };
+  player.status = "playing";
+  assert.equal(player.seek(120), 90);
+  assert.deepEqual(api.calls.at(-1), ["seek", "guild", 90_000]);
+  assert.equal(player.applyFilter("nightcore"), true);
+  assert.equal(player.applyFilter("yok"), false);
+  assert.ok(filterPreset("bas").equalizer.length);
+  assert.deepEqual(filterPreset("kapat"), {});
+});
+
+test("music commands are the Kabal names", () => {
+  const names = musicCommands.map((command) => command.data.name).sort();
+  assert.deepEqual(names, [
+    "atla", "devam", "duraklat", "filtreler", "kapat", "karistir", "liste", "lyrics", "oynat", "sardir", "sarki", "ses", "tekrarla",
+  ]);
+  for (const command of musicCommands) {
+    const body = command.data.toJSON();
+    assert.ok(body.description.length <= 100, body.name);
+  }
 });
